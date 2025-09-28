@@ -7,9 +7,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-
 // Interfaces matching App.tsx
-interface Position {
+export interface Position {
   id: string;
   symbol: string;
   side: 'BUY' | 'SELL';
@@ -24,7 +23,7 @@ interface Position {
   closeTime?: string;
 }
 
-interface Signal {
+export interface Signal {
   id: string;
   symbol: string;
   type: 'BUY' | 'SELL';
@@ -36,7 +35,7 @@ interface Signal {
   executedPrice?: number;
 }
 
-interface MarketData {
+export interface MarketData {
   symbol: string;
   price: number;
   change24h: number;
@@ -46,7 +45,7 @@ interface MarketData {
   low24h: number;
 }
 
-interface Balance {
+export interface Balance {
   capital: number;
   available: number;
   used: number;

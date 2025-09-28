@@ -1,3 +1,4 @@
+// bybitClient.ts
 import { RestClientV5, WebsocketClient } from 'bybit-api';
 import dotenv from 'dotenv';
 import { storage, Position, MarketData, Balance, Signal } from './storage';
@@ -34,14 +35,19 @@ export const bybitWsClient = new WebsocketClient({
   wsUrl: WS_URL,
 });
 
-// --- Safe subscription wrapper ---
-async function safeSubscribe(topics: string[]) {
-  try {
-    await bybitWsClient.subscribe(topics);
-    console.log('[Bybit WS] Subscribed to topics:', topics);
-  } catch (err) {
-    console.error('[Bybit WS] Subscription failed:', err);
+// --- Safe subscription wrapper with retry ---
+async function safeSubscribe(topics: string[], retries = 3, delay = 1000): Promise<void> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await bybitWsClient.subscribe(topics);
+      console.log('[Bybit WS] Subscribed to topics:', topics);
+      return;
+    } catch (err) {
+      console.error(`[Bybit WS] Subscription failed (attempt ${i + 1}/${retries}):`, err);
+      if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
+  console.error('[Bybit WS] Max subscription retries reached');
 }
 
 // --- Initialize WebSocket ---
@@ -51,23 +57,27 @@ export function initWebSocket() {
     await safeSubscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT']);
   });
 
-  bybitWsClient.on('update', (msg: any) => {
+  bybitWsClient.on('update', async (msg: any) => {
     if (msg.topic?.startsWith('tickers.')) {
-      const data = msg.data;
-      const current = storage.getMarketDataSync() || [];
-      const idx = current.findIndex(d => d.symbol === data.symbol);
-      const updated: MarketData = {
-        symbol: data.symbol,
-        price: parseFloat(data.lastPrice),
-        change24h: parseFloat(data.price24hPcnt),
-        changePercent24h: parseFloat(data.price24hPcnt) * 100,
-        volume24h: parseFloat(data.turnover24h),
-        high24h: parseFloat(data.highPrice24h),
-        low24h: parseFloat(data.lowPrice24h),
-      };
-      if (idx >= 0) current[idx] = updated;
-      else current.push(updated);
-      storage.setMarketData(current);
+      try {
+        const data = msg.data;
+        const update: MarketData = {
+          symbol: data.symbol,
+          price: parseFloat(data.lastPrice),
+          change24h: parseFloat(data.price24hPcnt) || 0,
+          changePercent24h: parseFloat(data.price24hPcnt) * 100 || 0,
+          volume24h: parseFloat(data.turnover24h) || 0,
+          high24h: parseFloat(data.highPrice24h) || 0,
+          low24h: parseFloat(data.lowPrice24h) || 0,
+        };
+        const current = await storage.getMarketData();
+        const idx = current.findIndex((d) => d.symbol === update.symbol);
+        if (idx >= 0) current[idx] = update;
+        else current.push(update);
+        await storage.setMarketData(current);
+      } catch (err) {
+        console.error('[Bybit WS] Error updating market data:', err);
+      }
     }
   });
 
@@ -79,64 +89,81 @@ export function initWebSocket() {
     console.warn('[Bybit WS] Connection closed, reconnecting...');
     setTimeout(initWebSocket, 3000);
   });
-
-  // WebSocket auto-connects on instantiation
 }
 initWebSocket();
 
-// --- Fetch market data ---
-export async function getMarketData(symbols: string[] = ['BTCUSDT', 'ETHUSDT']): Promise<MarketData[]> {
-  const response = await bybitRestClient.getTickers({ category: 'linear', symbol: symbols.join(',') });
-  const marketData: MarketData[] = response.result.list.map((item: any) => ({
-    symbol: item.symbol,
-    price: parseFloat(item.lastPrice),
-    change24h: parseFloat(item.price24hPcnt),
-    changePercent24h: parseFloat(item.price24hPcnt) * 100,
-    volume24h: parseFloat(item.turnover24h),
-    high24h: parseFloat(item.highPrice24h),
-    low24h: parseFloat(item.lowPrice24h),
-  }));
-  await storage.setMarketData(marketData);
-  return marketData;
+// --- Fetch market data with retry ---
+export async function getMarketData(symbols: string[] = ['BTCUSDT', 'ETHUSDT'], retries = 3): Promise<MarketData[]> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await bybitRestClient.getTickers({ category: 'linear', symbol: symbols.join(',') });
+      const marketData: MarketData[] = response.result.list.map((item: any) => ({
+        symbol: item.symbol,
+        price: parseFloat(item.lastPrice) || 0,
+        change24h: parseFloat(item.price24hPcnt) || 0,
+        changePercent24h: parseFloat(item.price24hPcnt) * 100 || 0,
+        volume24h: parseFloat(item.turnover24h) || 0,
+        high24h: parseFloat(item.highPrice24h) || 0,
+        low24h: parseFloat(item.lowPrice24h) || 0,
+      }));
+      await storage.setMarketData(marketData);
+      return marketData;
+    } catch (err) {
+      console.error(`[Bybit] getMarketData failed (attempt ${i + 1}/${retries}):`, err);
+      if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  console.error('[Bybit] Max retries reached for getMarketData');
+  return [];
 }
 
 // --- Fetch positions ---
 export async function getPositions(): Promise<Position[]> {
-  const response = await bybitRestClient.getPositionInfo({ category: 'linear' });
-  const positions: Position[] = response.result.list.map((pos: any) => ({
-    id: pos.positionIdx.toString(),
-    symbol: pos.symbol,
-    side: pos.side === 'Buy' ? 'BUY' : 'SELL',
-    size: parseFloat(pos.size),
-    entryPrice: parseFloat(pos.avgPrice),
-    currentPrice: parseFloat(pos.markPrice),
-    pnl: parseFloat(pos.unrealisedPnl),
-    pnlPercent: parseFloat(pos.positionValue) > 0
-      ? (parseFloat(pos.unrealisedPnl) / parseFloat(pos.positionValue)) * 100
-      : 0,
-    status: parseFloat(pos.size) > 0 ? 'OPEN' : 'CLOSED',
-    openTime: new Date(Number(pos.createdTime)).toISOString(),
-    closeTime: pos.updatedTime && parseFloat(pos.size) === 0
-      ? new Date(Number(pos.updatedTime)).toISOString()
-      : undefined,
-    exitPrice: parseFloat(pos.size) === 0 && pos.avgPrice ? parseFloat(pos.avgPrice) : undefined,
-    leverage: pos.leverage ?? 10,
-  }));
-  await storage.setPositions(positions);
-  return positions;
+  try {
+    const response = await bybitRestClient.getPositionInfo({ category: 'linear' });
+    const positions: Position[] = response.result.list.map((pos: any) => ({
+      id: pos.positionIdx.toString(),
+      symbol: pos.symbol,
+      side: pos.side === 'Buy' ? 'BUY' : 'SELL',
+      size: parseFloat(pos.size) || 0,
+      entryPrice: parseFloat(pos.avgPrice) || 0,
+      currentPrice: parseFloat(pos.markPrice) || 0,
+      pnl: parseFloat(pos.unrealisedPnl) || 0,
+      pnlPercent: parseFloat(pos.positionValue) > 0
+        ? (parseFloat(pos.unrealisedPnl) / parseFloat(pos.positionValue)) * 100
+        : 0,
+      status: parseFloat(pos.size) > 0 ? 'OPEN' : 'CLOSED',
+      openTime: new Date(Number(pos.createdTime)).toISOString(),
+      closeTime: pos.updatedTime && parseFloat(pos.size) === 0
+        ? new Date(Number(pos.updatedTime)).toISOString()
+        : undefined,
+      exitPrice: parseFloat(pos.size) === 0 && pos.avgPrice ? parseFloat(pos.avgPrice) : undefined,
+      leverage: parseFloat(pos.leverage) || 10,
+    }));
+    await storage.setPositions(positions);
+    return positions;
+  } catch (err) {
+    console.error('[Bybit] getPositions failed:', err);
+    return [];
+  }
 }
 
 // --- Fetch balance ---
 export async function getBalance(): Promise<Balance> {
-  const response = await bybitRestClient.getWalletBalance({ accountType: 'UNIFIED' });
-  const usdt = response.result.list[0].coin.find((c: any) => c.coin === 'USDT');
-  const balance: Balance = {
-    capital: parseFloat(usdt?.equity || '0'),
-    available: parseFloat(usdt?.availableToWithdraw || '0'),
-    used: parseFloat(usdt?.locked || '0'),
-  };
-  await storage.setBalance(balance);
-  return balance;
+  try {
+    const response = await bybitRestClient.getWalletBalance({ accountType: 'UNIFIED' });
+    const usdt = response.result.list[0].coin.find((c: any) => c.coin === 'USDT');
+    const balance: Balance = {
+      capital: parseFloat(usdt?.equity || '0'),
+      available: parseFloat(usdt?.availableToWithdraw || '0'),
+      used: parseFloat(usdt?.locked || '0'),
+    };
+    await storage.setBalance(balance);
+    return balance;
+  } catch (err) {
+    console.error('[Bybit] getBalance failed:', err);
+    return { capital: 0, available: 0, used: 0 };
+  }
 }
 
 // --- Scan trading signals ---
@@ -145,28 +172,32 @@ export async function scanSignals(): Promise<Signal[]> {
   const signals: Signal[] = [];
 
   for (const symbol of symbols) {
-    const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval: '15', limit: 50 });
-    const closes = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
-    if (closes.length < 20) continue;
+    try {
+      const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval: '15', limit: 50 });
+      const closes = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
+      if (closes.length < 20) continue;
 
-    const shortMA = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-    const longMA = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const shortMA = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
+      const longMA = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
 
-    let type: 'BUY' | 'SELL' | null = null;
-    if (shortMA > longMA) type = 'BUY';
-    if (shortMA < longMA) type = 'SELL';
+      let type: 'BUY' | 'SELL' | null = null;
+      if (shortMA > longMA) type = 'BUY';
+      if (shortMA < longMA) type = 'SELL';
 
-    if (type) {
-      signals.push({
-        id: randomUUID(),
-        symbol,
-        type,
-        score: Math.abs(shortMA - longMA),
-        price: closes[closes.length - 1],
-        confidence: Math.abs(shortMA - longMA) / longMA > 0.01 ? 'HIGH' : 'MEDIUM',
-        status: 'PENDING',
-        timestamp: new Date().toISOString(),
-      });
+      if (type) {
+        signals.push({
+          id: randomUUID(),
+          symbol,
+          type,
+          score: Math.abs(shortMA - longMA),
+          price: closes[closes.length - 1],
+          confidence: Math.abs(shortMA - longMA) / longMA > 0.01 ? 'HIGH' : 'MEDIUM',
+          status: 'PENDING',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.error(`[Bybit] scanSignals failed for ${symbol}:`, err);
     }
   }
 
@@ -182,19 +213,24 @@ export async function executeTrade(trade: {
   type: 'market' | 'limit';
   price?: number;
 }) {
-  const params: any = {
-    category: 'linear',
-    symbol: trade.symbol,
-    side: trade.side === 'BUY' ? 'Buy' : 'Sell',
-    orderType: trade.type,
-    qty: trade.size.toString(),
-  };
+  try {
+    const params: any = {
+      category: 'linear',
+      symbol: trade.symbol,
+      side: trade.side === 'BUY' ? 'Buy' : 'Sell',
+      orderType: trade.type,
+      qty: trade.size.toString(),
+    };
 
-  if (trade.type === 'limit' && trade.price) params.price = trade.price.toString();
+    if (trade.type === 'limit' && trade.price) params.price = trade.price.toString();
 
-  const response = await bybitRestClient.submitOrder(params);
-  await getPositions(); // refresh positions
-  return response.result;
+    const response = await bybitRestClient.submitOrder(params);
+    await getPositions(); // Refresh positions
+    return response.result;
+  } catch (err) {
+    console.error('[Bybit] executeTrade failed:', err);
+    throw err;
+  }
 }
 
 // --- Test connection ---

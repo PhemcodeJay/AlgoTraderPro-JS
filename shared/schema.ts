@@ -19,6 +19,7 @@ export const trades = pgTable("trades", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   closedAt: timestamp("closed_at"),
   pnl: decimal("pnl", { precision: 18, scale: 8 }),
+  pnlPercent: decimal("pnl_percent", { precision: 10, scale: 2 }),
 });
 
 // --- Signals table ---
@@ -64,8 +65,8 @@ export const users = pgTable("users", {
 });
 
 // --- Insert schemas ---
-export const insertTradeSchema = createInsertSchema(trades).omit({ id: true, createdAt: true });
-export const insertSignalSchema = createInsertSchema(signals).omit({ id: true, createdAt: true });
+export const insertTradeSchema = createInsertSchema(trades).omit({ id: true, createdAt: true, closedAt: true, pnl: true, pnlPercent: true });
+export const insertSignalSchema = createInsertSchema(signals).omit({ id: true, createdAt: true, executedPrice: true });
 export const insertSettingSchema = createInsertSchema(settings).omit({ id: true, updatedAt: true });
 export const insertWalletBalanceSchema = createInsertSchema(walletBalances).omit({ id: true, updatedAt: true });
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
@@ -95,7 +96,7 @@ export interface Position {
   status: 'OPEN' | 'CLOSED';
   openTime: Date | null;
   closeTime?: Date | null;
-  leverage: number; // Added to match trades table
+  leverage: number;
 }
 
 // --- Signal interface ---

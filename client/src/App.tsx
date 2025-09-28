@@ -23,7 +23,43 @@ import {
 import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import { Position, Signal, DashboardStats } from '@shared/schema';
+import { Position, Signal, DashboardStats, Trade } from '@shared/schema';
+
+// Convert backend Trade object to frontend Position
+const tradeToPosition = (trade: Trade, currentPrice?: number): Position => ({
+  id: trade.id,
+  symbol: trade.symbol,
+  side: trade.side,
+  size: Number(trade.quantity),
+  entryPrice: Number(trade.entryPrice),
+  currentPrice: currentPrice ?? Number(trade.entryPrice),
+  exitPrice: trade.exitPrice ? Number(trade.exitPrice) : undefined,
+  pnl: trade.pnl ? Number(trade.pnl) : 0,
+  pnlPercent: trade.pnl && trade.entryPrice && trade.quantity
+    ? (Number(trade.pnl) / (Number(trade.entryPrice) * Number(trade.quantity))) * 100
+    : 0,
+  status: trade.status,
+  openTime: trade.createdAt ? new Date(trade.createdAt) : null,
+  closeTime: trade.closedAt ? new Date(trade.closedAt) : null,
+  leverage: trade.leverage ?? 10,
+});
+
+// Convert backend Signal object to frontend Signal interface
+const signalMapper = (sig: Signal): Signal => ({
+  id: sig.id,
+  symbol: sig.symbol,
+  signalType: sig.signalType,
+  score: Number(sig.score),
+  entryPrice: Number(sig.entryPrice),
+  stopLoss: sig.stopLoss ? Number(sig.stopLoss) : undefined,
+  takeProfit: sig.takeProfit ? Number(sig.takeProfit) : undefined,
+  indicators: sig.indicators ?? {},
+  createdAt: sig.createdAt ? new Date(sig.createdAt) : null,
+  status: sig.status,
+  confidence: sig.confidence,
+  executedPrice: sig.executedPrice ? Number(sig.executedPrice) : undefined,
+});
+
 
 interface MarketData {
   symbol: string;
@@ -59,12 +95,8 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/positions');
       if (!response.ok) throw new Error('Failed to fetch positions');
-      const data = await response.json();
-      return data.map((pos: any) => ({
-        ...pos,
-        openTime: pos.openTime ? new Date(pos.openTime) : null,
-        closeTime: pos.closeTime ? new Date(pos.closeTime) : null,
-      }));
+      const trades: Trade[] = await response.json();
+      return trades.map(trade => tradeToPosition(trade));
     },
   });
 
@@ -73,13 +105,11 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/signals');
       if (!response.ok) throw new Error('Failed to fetch signals');
-      const data = await response.json();
-      return data.map((sig: any) => ({
-        ...sig,
-        createdAt: sig.createdAt ? new Date(sig.createdAt) : null,
-      }));
+      const rawSignals: Signal[] = await response.json();
+      return rawSignals.map(signalMapper);
     },
   });
+
 
   const { data: marketData = [], isLoading: loadingMarketData, error: errorMarketData } = useQuery<MarketData[]>({
     queryKey: ['market-data'],

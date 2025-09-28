@@ -95,6 +95,7 @@ export interface Position {
   status: 'OPEN' | 'CLOSED';
   openTime: Date | null;
   closeTime?: Date | null;
+  leverage: number; // Added to match trades table
 }
 
 // --- Signal interface ---

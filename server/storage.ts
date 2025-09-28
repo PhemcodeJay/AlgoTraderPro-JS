@@ -2,6 +2,11 @@ import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { UserType, InsertUser } from '@shared/schema';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 
 // Interfaces matching App.tsx
 interface Position {

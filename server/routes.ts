@@ -84,6 +84,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get('/api/app-status', async (req, res) => {
+    try {
+      const status = await storage.getAppStatus();
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch app status' });
+    }
+  });
+
+  app.post('/api/app-status', async (req, res) => {
+    try {
+      const status = req.body;
+      await storage.setAppStatus(status);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update app status' });
+    }
+  });
+
+  app.get('/api/api-config', async (req, res) => {
+    try {
+      const config = await storage.getApiConfig();
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch API config' });
+    }
+  });
+
+  app.post('/api/api-config', async (req, res) => {
+    try {
+      const config = req.body;
+      await storage.setApiConfig(config);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to save API config' });
+    }
+  });
+
+  app.get('/api/notification-config', async (req, res) => {
+    try {
+      const config = await storage.getNotificationConfig();
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch notification config' });
+    }
+  });
+
+  app.post('/api/notification-config', async (req, res) => {
+    try {
+      const config = req.body;
+      await storage.setNotificationConfig(config);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to save notification config' });
+    }
+  });
+
+  app.get('/api/trading-config', async (req, res) => {
+    try {
+      const config = await storage.getTradingConfig();
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch trading config' });
+    }
+  });
+
+  app.post('/api/trading-config', async (req, res) => {
+    try {
+      const config = req.body;
+      await storage.setTradingConfig(config);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to save trading config' });
+    }
+  });
+
+  app.get('/api/connection-status', async (req, res) => {
+    try {
+      const status = await storage.getConnectionStatus();
+      res.json({ status });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to fetch connection status' });
+    }
+  });
+
   // --- WebSocket Servers for live updates ---
   const marketWSS = new WebSocketServer({ server: httpServer, path: '/ws/market-data' });
   const positionsWSS = new WebSocketServer({ server: httpServer, path: '/ws/positions' });

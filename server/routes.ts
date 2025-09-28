@@ -7,7 +7,8 @@ import { bybitWsClient, getMarketData, getPositions, getBalance, scanSignals, ex
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
-  // API Routes (prefixed with /api)
+  // --- REST API Routes ---
+
   app.get('/api/positions', async (req, res) => {
     try {
       const positions = await getPositions();
@@ -63,131 +64,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/status', async (req, res) => {
+  app.post('/api/test-connection', async (req, res) => {
     try {
-      const status = await storage.getAppStatus();
-      res.json(status);
+      const success = await testConnection();
+      res.json({ success });
     } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch app status' });
+      res.status(500).json({ error: 'Failed to test connection' });
     }
   });
 
+  // --- Automated trading control ---
   app.post('/api/automated-trading', async (req, res) => {
     try {
       const { enabled } = req.body;
-      await storage.setAppStatus({ ...await storage.getAppStatus(), isAutomatedTradingEnabled: enabled });
+      const status = await storage.getAppStatus();
+      await storage.setAppStatus({ ...status, isAutomatedTradingEnabled: enabled });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Failed to toggle automated trading' });
     }
   });
 
-  app.post('/api/trading-mode', async (req, res) => {
-    try {
-      const { mode } = req.body;
-      await storage.setAppStatus({ ...await storage.getAppStatus(), tradingMode: mode });
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to change trading mode' });
-    }
-  });
-
-  app.get('/api/settings/api', async (req, res) => {
-    try {
-      const config = await storage.getApiConfig();
-      res.json(config);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch API config' });
-    }
-  });
-
-  app.post('/api/settings/api', async (req, res) => {
-    try {
-      await storage.setApiConfig(req.body);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to save API config' });
-    }
-  });
-
-  app.get('/api/settings/notify', async (req, res) => {
-    try {
-      const config = await storage.getNotificationConfig();
-      res.json(config);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch notification config' });
-    }
-  });
-
-  app.post('/api/settings/notify', async (req, res) => {
-    try {
-      await storage.setNotificationConfig(req.body);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to save notification config' });
-    }
-  });
-
-  app.get('/api/settings/trade', async (req, res) => {
-    try {
-      const config = await storage.getTradingConfig();
-      res.json(config);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch trading config' });
-    }
-  });
-
-  app.post('/api/settings/trade', async (req, res) => {
-    try {
-      await storage.setTradingConfig(req.body);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to save trading config' });
-    }
-  });
-
-  app.post('/api/test-connection', async (req, res) => {
-    try {
-      await testConnection();
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to test connection' });
-    }
-  });
-
-  app.post('/api/emergency-stop', async (req, res) => {
-    try {
-      await storage.setAppStatus({ tradingMode: 'virtual', isAutomatedTradingEnabled: false });
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to activate emergency stop' });
-    }
-  });
-
-  // User routes (example, if needed)
-  app.post('/api/users', async (req, res) => {
-    try {
-      const user = await storage.createUser(req.body);
-      res.json(user);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to create user' });
-    }
-  });
-
-  app.get('/api/users/:id', async (req, res) => {
-    try {
-      const user = await storage.getUser(req.params.id);
-      if (user) res.json(user);
-      else res.status(404).json({ error: 'User not found' });
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch user' });
-    }
-  });
-
-  // WebSocket Setup
+  // --- WebSocket Servers for live updates ---
   const marketWSS = new WebSocketServer({ server: httpServer, path: '/ws/market-data' });
   const positionsWSS = new WebSocketServer({ server: httpServer, path: '/ws/positions' });
 
+  // --- Market data updates ---
   bybitWsClient.on('update', (data: any) => {
     if (data.topic?.startsWith('tickers.')) {
       const update = {
@@ -199,26 +101,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         high24h: parseFloat(data.data.highPrice24h),
         low24h: parseFloat(data.data.lowPrice24h),
       };
-      // Update storage
-      const marketData = storage.getMarketDataSync(); // Synchronous helper
+      const marketData = storage.getMarketDataSync();
       const index = marketData.findIndex((d) => d.symbol === update.symbol);
-      if (index >= 0) {
-        marketData[index] = update;
-      } else {
-        marketData.push(update);
-      }
+      if (index >= 0) marketData[index] = update;
+      else marketData.push(update);
       storage.setMarketData(marketData);
+
       // Broadcast to clients
       marketWSS.clients.forEach((client) => {
-        if (client.readyState === client.OPEN) {
-          client.send(JSON.stringify(update));
-        }
+        if (client.readyState === client.OPEN) client.send(JSON.stringify(update));
       });
     }
   });
 
   bybitWsClient.subscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT']);
 
+  // --- WS client connections ---
   marketWSS.on('connection', (ws) => {
     console.log('Market WS client connected');
     ws.on('close', () => console.log('Market WS client disconnected'));
@@ -230,15 +128,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ws.on('close', () => console.log('Positions WS client disconnected'));
   });
 
-  // Poll positions to trigger updates
+  // --- Poll positions periodically ---
   setInterval(async () => {
     await getPositions();
     positionsWSS.clients.forEach((client) => {
-      if (client.readyState === client.OPEN) {
-        client.send(JSON.stringify({ action: 'invalidate' }));
-      }
+      if (client.readyState === client.OPEN) client.send(JSON.stringify({ action: 'invalidate' }));
     });
-  }, 60000);
+  }, 30000); // every 30s
+
+  // --- Automated trading loop ---
+  setInterval(async () => {
+    const status = await storage.getAppStatus();
+    if (!status.isAutomatedTradingEnabled) return;
+
+    const signals = await scanSignals();
+    for (const signal of signals) {
+      if (signal.status === 'PENDING') {
+        try {
+          const trade = {
+            symbol: signal.symbol,
+            side: signal.type,
+            size: 1, // You can replace with dynamic sizing logic
+            type: 'market' as const,
+          };
+          await executeTrade(trade);
+          console.log(`[AutomatedTrader] Executed trade: ${signal.symbol} ${signal.type}`);
+        } catch (err) {
+          console.error('[AutomatedTrader] Failed to execute trade:', err);
+        }
+      }
+    }
+  }, 15000); // scan every 15s
 
   return httpServer;
 }

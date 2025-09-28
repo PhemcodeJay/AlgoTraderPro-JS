@@ -15,17 +15,18 @@ export async function scanSignals(): Promise<Signal[]> {
       const kline = await bybitRestClient.getKline({
         category: 'linear',
         symbol,
-        interval: '15',
+        interval: '15', // 15-minute candles
         limit: 50,
       });
 
-      const closes = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
-      const highs = kline.result.list.map((c: any) => parseFloat(c[2])).reverse();
-      const lows = kline.result.list.map((c: any) => parseFloat(c[3])).reverse();
+      // Extract OHLC arrays
+      const closes: number[] = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
+      const highs: number[] = kline.result.list.map((c: any) => parseFloat(c[2])).reverse();
+      const lows: number[] = kline.result.list.map((c: any) => parseFloat(c[3])).reverse();
 
       if (closes.length < 20) continue;
 
-      // --- Use full indicators to get enhanced scores ---
+      // --- Compute indicator scores ---
       const enhancedScores: EnhancedSignalScore = scoreSignal(closes, highs, lows);
 
       // --- Determine preliminary type ---
@@ -35,8 +36,8 @@ export async function scanSignals(): Promise<Signal[]> {
 
       if (!type) continue;
 
-      // --- Create base signal object ---
-      let baseSignal: Signal = {
+      // --- Create base signal ---
+      const baseSignal: Signal = {
         id: randomUUID(),
         symbol,
         type,
@@ -47,17 +48,16 @@ export async function scanSignals(): Promise<Signal[]> {
         timestamp: new Date().toISOString(),
       };
 
-      // --- Apply ML weighting (50% ML / 50% indicator score) ---
-      const finalSignal = applyML(baseSignal, closes, highs, lows);
+      // --- Apply ML weighting ---
+      const finalSignal: Signal = applyML(baseSignal, closes, highs, lows);
 
       signals.push(finalSignal);
-
-    } catch (err) {
-      console.error(`[scanSignals] Error scanning ${symbol}:`, err);
+    } catch (err: any) {
+      console.error(`[scanSignals] Error scanning ${symbol}:`, err.message ?? err);
     }
   }
 
-  // Save to storage
+  // --- Save signals to storage ---
   await storage.setSignals(signals);
   return signals;
 }

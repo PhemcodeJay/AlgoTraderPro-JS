@@ -1,3 +1,4 @@
+// storage.ts
 import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
@@ -83,11 +84,9 @@ interface AppStatus {
 
 // Storage interface
 export interface IStorage {
-  // User methods
   getUser(id: string): Promise<UserType | undefined>;
   getUserByUsername(username: string): Promise<UserType | undefined>;
   createUser(user: InsertUser): Promise<UserType>;
-  // Trading data methods
   getPositions(): Promise<Position[]>;
   setPositions(positions: Position[]): Promise<void>;
   addPosition(position: Position): Promise<void>;
@@ -108,8 +107,27 @@ export interface IStorage {
   setAppStatus(status: AppStatus): Promise<void>;
   getConnectionStatus(): Promise<string>;
   setConnectionStatus(status: string): Promise<void>;
-  // Synchronous helper for WebSocket updates
   getMarketDataSync(): MarketData[];
+}
+
+// Simple locking mechanism to prevent concurrent file access
+class FileLock {
+  private isLocked: boolean = false;
+  private queue: Array<() => void> = [];
+
+  async acquire(): Promise<void> {
+    if (this.isLocked) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    } else {
+      this.isLocked = true;
+    }
+  }
+
+  release(): void {
+    this.isLocked = false;
+    const next = this.queue.shift();
+    if (next) next();
+  }
 }
 
 // In-memory storage implementation
@@ -124,15 +142,17 @@ export class MemStorage implements IStorage {
   private tradingConfig: TradingConfig;
   private appStatus: AppStatus;
   private connectionStatus: string;
-
-  private readonly DATA_FILE = path.join(__dirname, 'data.json');
+  private readonly DATA_FILE: string;
+  private fileLock: FileLock;
 
   constructor() {
+    this.DATA_FILE = path.join(__dirname, 'data.json');
+    this.fileLock = new FileLock();
     this.users = new Map();
     this.positions = new Map();
     this.signals = new Map();
     this.marketData = new Map();
-    this.balance = { capital: 0, available: 0, used: 0 };
+    this.balance = { capital: 10000, available: 10000, used: 0 }; // Initialize with non-zero defaults
     this.apiConfig = { bybitApiKey: '', bybitApiSecret: '', bybitTestnet: true };
     this.notificationConfig = {
       discordEnabled: false,
@@ -153,27 +173,46 @@ export class MemStorage implements IStorage {
     };
     this.appStatus = { tradingMode: 'virtual', isAutomatedTradingEnabled: false };
     this.connectionStatus = 'disconnected';
-    this.loadFromFile().catch(console.error);
+    this.initialize().catch((err) => console.error('[Storage] Initialization error:', err));
   }
 
-  // File-based persistence
-  private async saveToFile() {
-    const data = {
-      users: Array.from(this.users.entries()),
-      positions: Array.from(this.positions.entries()),
-      signals: Array.from(this.signals.entries()),
-      marketData: Array.from(this.marketData.entries()),
-      balance: this.balance,
-      apiConfig: this.apiConfig,
-      notificationConfig: this.notificationConfig,
-      tradingConfig: this.tradingConfig,
-      appStatus: this.appStatus,
-      connectionStatus: this.connectionStatus,
-    };
-    await fs.writeFile(this.DATA_FILE, JSON.stringify(data, null, 2));
+  // Initialize data from file with retry mechanism
+  private async initialize(): Promise<void> {
+    try {
+      await this.loadFromFile();
+    } catch (error) {
+      console.error('[Storage] Initial load failed, retrying in 1s:', error);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await this.loadFromFile();
+    }
   }
 
-  private async loadFromFile() {
+  // File-based persistence with locking
+  private async saveToFile(): Promise<void> {
+    await this.fileLock.acquire();
+    try {
+      const data = {
+        users: Array.from(this.users.entries()),
+        positions: Array.from(this.positions.entries()),
+        signals: Array.from(this.signals.entries()),
+        marketData: Array.from(this.marketData.entries()),
+        balance: this.balance,
+        apiConfig: this.apiConfig,
+        notificationConfig: this.notificationConfig,
+        tradingConfig: this.tradingConfig,
+        appStatus: this.appStatus,
+        connectionStatus: this.connectionStatus,
+      };
+      await fs.writeFile(this.DATA_FILE, JSON.stringify(data, null, 2), { flag: 'w' });
+    } catch (error) {
+      console.error('[Storage] Failed to save to file:', error);
+    } finally {
+      this.fileLock.release();
+    }
+  }
+
+  private async loadFromFile(): Promise<void> {
+    await this.fileLock.acquire();
     try {
       const data = await fs.readFile(this.DATA_FILE, 'utf-8');
       const parsed = JSON.parse(data);
@@ -187,8 +226,12 @@ export class MemStorage implements IStorage {
       this.tradingConfig = parsed.tradingConfig || this.tradingConfig;
       this.appStatus = parsed.appStatus || this.appStatus;
       this.connectionStatus = parsed.connectionStatus || this.connectionStatus;
+      console.log('[Storage] Loaded data from file successfully');
     } catch (error) {
-      console.log('No data file found, using in-memory defaults');
+      console.warn('[Storage] No data file found or parse error, using in-memory defaults');
+      await this.saveToFile(); // Create file with defaults if it doesn't exist
+    } finally {
+      this.fileLock.release();
     }
   }
 
@@ -248,47 +291,47 @@ export class MemStorage implements IStorage {
   }
 
   async getBalance(): Promise<Balance> {
-    return this.balance;
+    return { ...this.balance };
   }
 
   async setBalance(balance: Balance): Promise<void> {
-    this.balance = balance;
+    this.balance = { ...balance };
     await this.saveToFile();
   }
 
   async getApiConfig(): Promise<ApiConfig> {
-    return this.apiConfig;
+    return { ...this.apiConfig };
   }
 
   async setApiConfig(config: ApiConfig): Promise<void> {
-    this.apiConfig = config;
+    this.apiConfig = { ...config };
     await this.saveToFile();
   }
 
   async getNotificationConfig(): Promise<NotificationConfig> {
-    return this.notificationConfig;
+    return { ...this.notificationConfig };
   }
 
   async setNotificationConfig(config: NotificationConfig): Promise<void> {
-    this.notificationConfig = config;
+    this.notificationConfig = { ...config };
     await this.saveToFile();
   }
 
   async getTradingConfig(): Promise<TradingConfig> {
-    return this.tradingConfig;
+    return { ...this.tradingConfig };
   }
 
   async setTradingConfig(config: TradingConfig): Promise<void> {
-    this.tradingConfig = config;
+    this.tradingConfig = { ...config };
     await this.saveToFile();
   }
 
   async getAppStatus(): Promise<AppStatus> {
-    return this.appStatus;
+    return { ...this.appStatus };
   }
 
   async setAppStatus(status: AppStatus): Promise<void> {
-    this.appStatus = status;
+    this.appStatus = { ...status };
     await this.saveToFile();
   }
 
@@ -301,7 +344,6 @@ export class MemStorage implements IStorage {
     await this.saveToFile();
   }
 
-  // Synchronous helper for WebSocket updates
   getMarketDataSync(): MarketData[] {
     return Array.from(this.marketData.values());
   }

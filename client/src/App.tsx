@@ -6,11 +6,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import TradingSidebar from "./components/TradingSidebar";
 import TradingHeader from "./components/TradingHeader";
-import TradingDashboard from "./components/TradingDashboard";
-import MarketOverview from "./components/MarketOverview";
-import TradeExecutionPanel from "./components/TradeExecutionPanel";
 import AnalyticsPage from "./components/AnalyticsPage";
 import SettingsPanel from "./components/SettingsPanel";
+import MarketOverview from "./components/MarketOverview";
+import TradeExecutionPanel from "./components/TradeExecutionPanel";
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -60,7 +59,12 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/positions');
       if (!response.ok) throw new Error('Failed to fetch positions');
-      return response.json();
+      const data = await response.json();
+      return data.map((pos: any) => ({
+        ...pos,
+        openTime: pos.openTime ? new Date(pos.openTime) : null,
+        closeTime: pos.closeTime ? new Date(pos.closeTime) : null,
+      }));
     },
   });
 
@@ -69,7 +73,11 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/signals');
       if (!response.ok) throw new Error('Failed to fetch signals');
-      return response.json();
+      const data = await response.json();
+      return data.map((sig: any) => ({
+        ...sig,
+        createdAt: sig.createdAt ? new Date(sig.createdAt) : null,
+      }));
     },
   });
 
@@ -392,86 +400,58 @@ function App() {
       return position.pnlPercent;
     }
     const pnl = computePnL(position);
-    const initial = position.entryPrice * position.size;
-    return (pnl / initial) * 100;
+    return (pnl / (position.entryPrice * position.size)) * 100;
   };
 
-  const stats: DashboardStats = {
-    totalPnL: positions.reduce((sum, p) => sum + computePnL(p), 0),
-    winRate: (positions.filter(p => p.status === "CLOSED" && p.pnl > 0).length / Math.max(1, positions.filter(p => p.status === "CLOSED").length)) * 100,
-    totalTrades: positions.length,
-    activePositions: positions.filter(p => p.status === "OPEN").length
+  const formatDateTime = (date: Date | string | null | undefined) => {
+    if (!date) return 'N/A';
+    
+    const dateObj = typeof date === 'string' ? new Date(date) : date;
+    
+    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+      return 'N/A';
+    }
+    
+    return dateObj.toLocaleDateString() + " " + 
+           dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  const dailyPnL = positions
-    .filter(p => p.status === "CLOSED" && p.closeTime && new Date(p.closeTime).toDateString() === new Date().toDateString())
-    .reduce((sum, p) => sum + p.pnl, 0);
-
-  const handleScanSignals = async () => {
+  const handleScanSignals = () => {
     setIsScanning(true);
-    await scanSignals.mutateAsync();
+    scanSignals.mutate();
   };
 
   const handleExecuteSignal = (signal: Signal) => {
     const trade = {
       symbol: signal.symbol,
       side: signal.signalType,
+      quantity: 0, // TODO: Calculate based on risk management
       price: signal.entryPrice,
-      type: 'limit',
+      stopLoss: signal.stopLoss,
+      takeProfit: signal.takeProfit,
+      leverage: tradingConfig.leverage,
     };
     executeTrade.mutate(trade);
   };
 
-  const handleClosePosition = (position: Position) => {
-    const trade = {
-      symbol: position.symbol,
-      side: position.side === 'BUY' ? 'SELL' : 'BUY',
-      size: position.size,
-      type: 'market',
-    };
-    executeTrade.mutate(trade);
+  // Compute dashboard stats
+  const stats: DashboardStats = {
+    totalPnL: positions.reduce((sum, p) => sum + computePnL(p), 0),
+    winRate: positions.filter(p => p.status === "CLOSED" && p.pnl > 0).length / Math.max(positions.filter(p => p.status === "CLOSED").length, 1) * 100,
+    totalTrades: positions.length,
+    activePositions: positions.filter(p => p.status === "OPEN").length,
   };
 
-  const handleExecuteTrade = (trade: any) => {
-    executeTrade.mutate(trade);
-  };
-
-  const formatPnL = (pnl: number) => {
-    const sign = pnl >= 0 ? "+" : "";
-    return `${sign}$${pnl.toFixed(2)}`;
-  };
-
-  const getPnLColor = (pnl: number) => {
-    return pnl >= 0 ? "text-trading-profit" : "text-trading-loss";
-  };
-
-  const formatDateTime = (date: Date | null) => {
-    if (!date) return 'N/A';
-    return date.toLocaleDateString() + " " + 
-           date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-  };
+  const dailyPnL = positions
+    .filter(p => {
+      if (p.status !== "CLOSED" || !p.closeTime) return false;
+      const closeDate = typeof p.closeTime === 'string' ? new Date(p.closeTime) : p.closeTime;
+      return closeDate instanceof Date && !isNaN(closeDate.getTime()) && closeDate.toDateString() === new Date().toDateString();
+    })
+    .reduce((sum, p) => sum + p.pnl, 0);
 
   const renderPage = () => {
-    if (loadingPositions || loadingSignals || loadingMarketData || loadingBalance || loadingAppStatus) {
-      return <div className="flex justify-center items-center h-full">Loading...</div>;
-    }
-
-    if (errorPositions || errorSignals || errorMarketData || errorBalance || errorAppStatus) {
-      return <div className="flex justify-center items-center h-full text-red-500">Error loading data: Check connection or try again later.</div>;
-    }
-
     switch (currentPage) {
-      case "dashboard":
-        return (
-          <TradingDashboard
-            stats={stats}
-            positions={positions.filter(p => p.status === "OPEN")}
-            signals={signals.filter(s => s.status === "PENDING")}
-            isAutomatedTradingEnabled={isAutomatedTradingEnabled}
-            onToggleAutomatedTrading={() => toggleAutomatedTrading.mutate(!isAutomatedTradingEnabled)}
-          />
-        );
-
       case "positions":
         return (
           <div className="p-6 space-y-6">
@@ -484,7 +464,7 @@ function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Card className="hover-elevate">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">Open Positions</CardTitle>
@@ -492,20 +472,33 @@ function App() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold font-mono">{positions.filter(p => p.status === "OPEN").length}</div>
-                  <p className="text-xs text-muted-foreground">Currently active</p>
+                  <p className="text-xs text-muted-foreground">Active trades</p>
                 </CardContent>
               </Card>
 
               <Card className="hover-elevate">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total P&L</CardTitle>
+                  <CardTitle className="text-sm font-medium">Total PnL</CardTitle>
                   <DollarSign className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold font-mono ${getPnLColor(positions.reduce((sum, p) => sum + computePnL(p), 0))}`}>
-                    {formatPnL(positions.reduce((sum, p) => sum + computePnL(p), 0))}
+                  <div className={`text-2xl font-bold font-mono ${stats.totalPnL >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                    {stats.totalPnL >= 0 ? "+" : ""}${stats.totalPnL.toFixed(2)}
                   </div>
-                  <p className="text-xs text-muted-foreground">All positions</p>
+                  <p className="text-xs text-muted-foreground">All time</p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover-elevate">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Daily PnL</CardTitle>
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold font-mono ${dailyPnL >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                    {dailyPnL >= 0 ? "+" : ""}${dailyPnL.toFixed(2)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Today</p>
                 </CardContent>
               </Card>
 
@@ -515,18 +508,16 @@ function App() {
                   <Target className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">
-                    {((positions.filter(p => p.status === "CLOSED" && p.pnl > 0).length / Math.max(positions.filter(p => p.status === "CLOSED").length, 1)) * 100).toFixed(0)}%
-                  </div>
-                  <p className="text-xs text-muted-foreground">Closed positions</p>
+                  <div className="text-2xl font-bold font-mono">{stats.winRate.toFixed(0)}%</div>
+                  <p className="text-xs text-muted-foreground">Closed trades</p>
                 </CardContent>
               </Card>
             </div>
 
             <Tabs defaultValue="open" className="w-full">
               <TabsList>
-                <TabsTrigger value="open">Open Positions</TabsTrigger>
-                <TabsTrigger value="closed">Closed Positions</TabsTrigger>
+                <TabsTrigger value="open">Open ({positions.filter(p => p.status === "OPEN").length})</TabsTrigger>
+                <TabsTrigger value="closed">Closed ({positions.filter(p => p.status === "CLOSED").length})</TabsTrigger>
               </TabsList>
 
               <TabsContent value="open" className="space-y-4">
@@ -535,36 +526,33 @@ function App() {
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <Badge variant={position.side === "BUY" ? "default" : "destructive"}>
-                            {position.side}
-                          </Badge>
+                          <div className="flex items-center gap-2">
+                            {position.side === "BUY" ? (
+                              <TrendingUp className="w-4 h-4 text-trading-profit" />
+                            ) : (
+                              <TrendingDown className="w-4 h-4 text-trading-loss" />
+                            )}
+                            <Badge variant="outline">{position.symbol}</Badge>
+                          </div>
                           <div>
-                            <div className="font-semibold">{position.symbol}</div>
+                            <div className="font-semibold">Entry: ${position.entryPrice.toFixed(2)}</div>
                             <div className="text-sm text-muted-foreground">
-                              Size: {position.size} @ ${position.entryPrice.toFixed(2)}
+                              Size: {position.size.toFixed(6)}
                             </div>
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className={`font-semibold font-mono ${getPnLColor(computePnL(position))}`}>
-                            {formatPnL(computePnL(position))}
+                          <div className={`font-bold ${computePnL(position) >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                            {computePnL(position) >= 0 ? "+" : ""}${computePnL(position).toFixed(2)}
                           </div>
-                          <div className={`text-sm font-mono ${getPnLColor(computePnL(position))}`}>
-                            ({computePnLPercent(position) >= 0 ? "+" : ""}{computePnLPercent(position).toFixed(2)}%)
-                          </div>
-                          <div className="text-sm text-muted-foreground font-mono">
-                            Current: ${position.currentPrice != null ? position.currentPrice.toFixed(2) : 'N/A'}
+                          <div className={`text-sm ${computePnLPercent(position) >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                            {computePnLPercent(position).toFixed(2)}%
                           </div>
                         </div>
-                        <div className="text-sm text-muted-foreground">
-                          <div className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {formatDateTime(position.openTime)}
-                          </div>
-                        </div>
-                        <Button size="sm" variant="outline" onClick={() => handleClosePosition(position)}>
-                          Close Position
-                        </Button>
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground flex justify-between">
+                        <span>Open: {formatDateTime(position.openTime)}</span>
+                        <span>Lev: {position.leverage}x</span>
                       </div>
                     </CardContent>
                   </Card>
@@ -582,30 +570,39 @@ function App() {
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <Badge variant={position.side === "BUY" ? "default" : "destructive"}>
-                            {position.side}
-                          </Badge>
+                          <div className="flex items-center gap-2">
+                            {position.side === "BUY" ? (
+                              <TrendingUp className="w-4 h-4 text-muted-foreground" />
+                            ) : (
+                              <TrendingDown className="w-4 h-4 text-muted-foreground" />
+                            )}
+                            <Badge variant="outline">{position.symbol}</Badge>
+                          </div>
                           <div>
-                            <div className="font-semibold">{position.symbol}</div>
+                            <div className="font-semibold text-muted-foreground">
+                              Entry: ${position.entryPrice.toFixed(2)} • Exit: ${position.exitPrice?.toFixed(2) ?? 'N/A'}
+                            </div>
                             <div className="text-sm text-muted-foreground">
-                              Size: {position.size} • Entry: ${position.entryPrice.toFixed(2)} • Exit: ${position.exitPrice?.toFixed(2) || 'N/A'}
+                              Size: {position.size.toFixed(6)}
                             </div>
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className={`font-semibold font-mono ${getPnLColor(position.pnl)}`}>
-                            {formatPnL(position.pnl)}
+                          <div className={`font-bold ${position.pnl >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                            {position.pnl >= 0 ? "+" : ""}${position.pnl.toFixed(2)}
                           </div>
-                          <div className={`text-sm font-mono ${getPnLColor(position.pnl)}`}>
-                            ({position.pnlPercent >= 0 ? "+" : ""}{position.pnlPercent.toFixed(2)}%)
+                          <div className={`text-sm ${position.pnlPercent >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                            {position.pnlPercent.toFixed(2)}%
                           </div>
                         </div>
-                        <div className="text-sm text-muted-foreground">
-                          <div>Opened: {formatDateTime(position.openTime)}</div>
-                          <div>Closed: {position.closeTime ? formatDateTime(position.closeTime) : 'N/A'}</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {position.pnl > 0 ? (
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground flex justify-between">
+                        <span>Open: {formatDateTime(position.openTime)}</span>
+                        <span>Close: {formatDateTime(position.closeTime)}</span>
+                      </div>
+                      <div className="mt-1 flex justify-end">
+                        <div className="flex items-center gap-1 text-sm">
+                          {position.pnl >= 0 ? (
                             <CheckCircle className="w-4 h-4 text-trading-profit" />
                           ) : (
                             <XCircle className="w-4 h-4 text-trading-loss" />
@@ -852,13 +849,69 @@ function App() {
 
       default:
         return (
-          <TradingDashboard
-            stats={stats}
-            positions={positions.filter(p => p.status === "OPEN")}
-            signals={signals.filter(s => s.status === "PENDING")}
-            isAutomatedTradingEnabled={isAutomatedTradingEnabled}
-            onToggleAutomatedTrading={() => toggleAutomatedTrading.mutate(!isAutomatedTradingEnabled)}
-          />
+          <div className="p-6 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <Card className="hover-elevate">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Total PnL</CardTitle>
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold font-mono ${stats.totalPnL >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                    {stats.totalPnL >= 0 ? "+" : ""}${stats.totalPnL.toFixed(2)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">All positions</p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover-elevate">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Win Rate</CardTitle>
+                  <Target className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold font-mono">{stats.winRate.toFixed(0)}%</div>
+                  <p className="text-xs text-muted-foreground">Closed trades</p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover-elevate">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Total Trades</CardTitle>
+                  <Activity className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold font-mono">{stats.totalTrades}</div>
+                  <p className="text-xs text-muted-foreground">All time</p>
+                </CardContent>
+              </Card>
+
+              <Card className="hover-elevate">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">Active Positions</CardTitle>
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold font-mono">{stats.activePositions}</div>
+                  <p className="text-xs text-muted-foreground">Currently open</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <MarketOverview
+                marketData={marketData}
+                onSymbolSelect={setSelectedSymbol}
+                selectedSymbol={selectedSymbol}
+              />
+              <TradeExecutionPanel
+                selectedSymbol={selectedSymbol}
+                currentPrice={getCurrentPrice(selectedSymbol)}
+                balance={{ available: balance.available, used: balance.used }}
+                onExecuteTrade={(trade) => executeTrade.mutate(trade)}
+              />
+            </div>
+          </div>
         );
     }
   };

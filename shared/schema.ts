@@ -93,8 +93,8 @@ export interface Position {
   pnl: number;
   pnlPercent: number;
   status: 'OPEN' | 'CLOSED';
-  openTime: string;
-  closeTime?: string;
+  openTime: Date | null;
+  closeTime?: Date | null;
 }
 
 // --- Signal interface ---
@@ -107,7 +107,7 @@ export interface Signal {
   stopLoss?: number;
   takeProfit?: number;
   indicators?: Record<string, number>;
-  createdAt?: Date;
+  createdAt: Date | null;
   status: 'PENDING' | 'EXECUTED' | 'EXPIRED';
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   executedPrice?: number;

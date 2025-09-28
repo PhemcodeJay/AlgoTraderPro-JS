@@ -1,3 +1,4 @@
+// routes.ts
 import type { Express } from 'express';
 import { createServer, type Server } from 'http';
 import { WebSocketServer } from 'ws';
@@ -8,7 +9,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
   // --- REST API Routes ---
-
   app.get('/api/positions', async (req, res) => {
     try {
       const positions = await getPositions();
@@ -73,7 +73,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // --- Automated trading control ---
   app.post('/api/automated-trading', async (req, res) => {
     try {
       const { enabled } = req.body;
@@ -90,27 +89,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const positionsWSS = new WebSocketServer({ server: httpServer, path: '/ws/positions' });
 
   // --- Market data updates ---
-  bybitWsClient.on('update', (data: any) => {
+  bybitWsClient.on('update', async (data: any) => {
     if (data.topic?.startsWith('tickers.')) {
-      const update = {
-        symbol: data.data.symbol,
-        price: parseFloat(data.data.lastPrice),
-        change24h: parseFloat(data.data.price24hPcnt),
-        changePercent24h: parseFloat(data.data.price24hPcnt) * 100,
-        volume24h: parseFloat(data.data.turnover24h),
-        high24h: parseFloat(data.data.highPrice24h),
-        low24h: parseFloat(data.data.lowPrice24h),
-      };
-      const marketData = storage.getMarketDataSync();
-      const index = marketData.findIndex((d) => d.symbol === update.symbol);
-      if (index >= 0) marketData[index] = update;
-      else marketData.push(update);
-      storage.setMarketData(marketData);
+      try {
+        const update = {
+          symbol: data.data.symbol,
+          price: parseFloat(data.data.lastPrice) || 0,
+          change24h: parseFloat(data.data.price24hPcnt) || 0,
+          changePercent24h: parseFloat(data.data.price24hPcnt) * 100 || 0,
+          volume24h: parseFloat(data.data.turnover24h) || 0,
+          high24h: parseFloat(data.data.highPrice24h) || 0,
+          low24h: parseFloat(data.data.lowPrice24h) || 0,
+        };
+        const marketData = await storage.getMarketData();
+        const index = marketData.findIndex((d) => d.symbol === update.symbol);
+        if (index >= 0) marketData[index] = update;
+        else marketData.push(update);
+        await storage.setMarketData(marketData);
 
-      // Broadcast to clients
-      marketWSS.clients.forEach((client) => {
-        if (client.readyState === client.OPEN) client.send(JSON.stringify(update));
-      });
+        // Broadcast to clients
+        marketWSS.clients.forEach((client) => {
+          if (client.readyState === client.OPEN) client.send(JSON.stringify(update));
+        });
+      } catch (err) {
+        console.error('[WebSocket] Error broadcasting market data:', err);
+      }
     }
   });
 
@@ -122,43 +125,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ws.on('close', () => console.log('Market WS client disconnected'));
   });
 
-  positionsWSS.on('connection', (ws) => {
+  positionsWSS.on('connection', async (ws) => {
     console.log('Positions WS client connected');
-    ws.send(JSON.stringify({ action: 'invalidate' }));
+    try {
+      const positions = await storage.getPositions();
+      ws.send(JSON.stringify({ action: 'update', data: positions }));
+    } catch (err) {
+      console.error('[WebSocket] Error sending initial positions:', err);
+    }
     ws.on('close', () => console.log('Positions WS client disconnected'));
   });
 
   // --- Poll positions periodically ---
   setInterval(async () => {
-    await getPositions();
-    positionsWSS.clients.forEach((client) => {
-      if (client.readyState === client.OPEN) client.send(JSON.stringify({ action: 'invalidate' }));
-    });
-  }, 30000); // every 30s
-
-  // --- Automated trading loop ---
-  setInterval(async () => {
-    const status = await storage.getAppStatus();
-    if (!status.isAutomatedTradingEnabled) return;
-
-    const signals = await scanSignals();
-    for (const signal of signals) {
-      if (signal.status === 'PENDING') {
-        try {
-          const trade = {
-            symbol: signal.symbol,
-            side: signal.type,
-            size: 1, // You can replace with dynamic sizing logic
-            type: 'market' as const,
-          };
-          await executeTrade(trade);
-          console.log(`[AutomatedTrader] Executed trade: ${signal.symbol} ${signal.type}`);
-        } catch (err) {
-          console.error('[AutomatedTrader] Failed to execute trade:', err);
+    try {
+      const positions = await getPositions();
+      positionsWSS.clients.forEach((client) => {
+        if (client.readyState === client.OPEN) {
+          client.send(JSON.stringify({ action: 'update', data: positions }));
         }
-      }
+      });
+    } catch (err) {
+      console.error('[WebSocket] Error polling positions:', err);
     }
-  }, 15000); // scan every 15s
+  }, 30000); // every 30s
 
   return httpServer;
 }

@@ -1,12 +1,11 @@
+// index.ts
 import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { registerRoutes } from './routes';
 import { setupVite, serveStatic, log } from './vite';
 import { storage } from './storage';
-import { scanSignals, executeTrade, getPositions, getMarketData, getBalance, testConnection } from './bybitClient';
-import { WebSocketServer } from 'ws';
-import { randomUUID } from 'crypto';
+import { startAutomatedTrading } from './automatedTrader';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8000', 10);
@@ -70,38 +69,11 @@ app.get('/', (_req: Request, res: Response) => {
       log(`Server running on http://localhost:${PORT}`);
     });
 
-    // --- Optional: ML / automated trading loop ---
-    setInterval(async () => {
-      try {
-        const status = await storage.getAppStatus();
-        if (!status.isAutomatedTradingEnabled) return;
-
-        // Scan for signals
-        const signals = await scanSignals();
-
-        // Execute pending signals
-        for (const signal of signals) {
-          if (signal.status === 'PENDING') {
-            try {
-              await executeTrade({
-                symbol: signal.symbol,
-                side: signal.type,
-                size: 1, // dynamic sizing logic can be added
-                type: 'market',
-              });
-              log(`[AutomatedTrader] Executed trade: ${signal.symbol} ${signal.type}`);
-              // Optionally notify front-end via WebSocket
-              // await notifyClients(signal);
-            } catch (err) {
-              log(`[AutomatedTrader] Failed to execute trade: ${err}`);
-            }
-          }
-        }
-      } catch (err) {
-        log(`[AutomatedTrader] Error scanning signals: ${err}`);
-      }
-    }, 15000); // every 15s
-
+    // Start automated trading if enabled
+    const status = await storage.getAppStatus();
+    if (status.isAutomatedTradingEnabled) {
+      startAutomatedTrading(status.tradingMode);
+    }
   } catch (error) {
     log(`Failed to start server: ${error}`);
     process.exit(1);

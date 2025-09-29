@@ -4,23 +4,23 @@
   "signals": [],
   "marketData": [],
   "balance": {
-    "capital": 10000,
-    "available": 10000,
+    "capital": 2.02328766,
+    "available": null,
     "used": 0
   },
   "apiConfig": {
-    "bybitApiKey": "",
-    "bybitApiSecret": "",
-    "bybitTestnet": true
+    "bybitApiKey": "F7aQeUkd3obyUSDeNJ",
+    "bybitApiSecret": "A8WNJSiQodExiy2U2GsKTp2Na5ytSwBlK7iD",
+    "bybitTestnet": false
   },
   "notificationConfig": {
     "discordEnabled": false,
-    "discordWebhook": "",
+    "discordWebhook": "https://discord.com/api/webhooks/1398790878755295343/4SSV8EvFjBrabgaVbCySl6HRj8GMy5wA_0xrYeccnFE7tU0ODWnyX3NjCS8-XXcIzOe7",
     "telegramEnabled": false,
-    "telegramBotToken": "",
-    "telegramChatId": "",
+    "telegramBotToken": "8160938302:AAFUmPahGk14OY8F1v5FLHGoVRD-pGTvSOY",
+    "telegramChatId": "5852301284",
     "whatsappEnabled": false,
-    "whatsappNumber": ""
+    "whatsappNumber": "+254101674289"
   },
   "tradingConfig": {
     "maxPositions": 5,
@@ -34,5 +34,5 @@
     "tradingMode": "virtual",
     "isAutomatedTradingEnabled": false
   },
-  "connectionStatus": "disconnected"
+  "connectionStatus": "connected"
 }

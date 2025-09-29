@@ -18,48 +18,69 @@ import {
   XCircle,
   Activity,
   Target,
-  DollarSign
+  DollarSign,
+  Send
 } from "lucide-react";
 import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import { Position, Signal, DashboardStats, Trade } from '@shared/schema';
 
-// Convert backend Trade object to frontend Position
-const tradeToPosition = (trade: Trade, currentPrice?: number): Position => ({
-  id: trade.id,
-  symbol: trade.symbol,
-  side: trade.side,
-  size: Number(trade.quantity),
-  entryPrice: Number(trade.entryPrice),
-  currentPrice: currentPrice ?? Number(trade.entryPrice),
-  exitPrice: trade.exitPrice ? Number(trade.exitPrice) : undefined,
-  pnl: trade.pnl ? Number(trade.pnl) : 0,
-  pnlPercent: trade.pnl && trade.entryPrice && trade.quantity
-    ? (Number(trade.pnl) / (Number(trade.entryPrice) * Number(trade.quantity))) * 100
-    : 0,
-  status: trade.status,
-  openTime: trade.createdAt ? new Date(trade.createdAt) : null,
-  closeTime: trade.closedAt ? new Date(trade.closedAt) : null,
-  leverage: trade.leverage ?? 10,
-});
+// Define interfaces matching backend storage.ts
+interface Position {
+  id: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  size: number;
+  entryPrice: number;
+  currentPrice?: number;
+  exitPrice?: number;
+  pnl: number;
+  pnlPercent: number;
+  status: 'OPEN' | 'CLOSED';
+  openTime: string;
+  closeTime?: string;
+  leverage: number;
+}
 
-// Convert backend Signal object to frontend Signal interface
-const signalMapper = (sig: Signal): Signal => ({
-  id: sig.id,
-  symbol: sig.symbol,
-  signalType: sig.signalType,
-  score: Number(sig.score),
-  entryPrice: Number(sig.entryPrice),
-  stopLoss: sig.stopLoss ? Number(sig.stopLoss) : undefined,
-  takeProfit: sig.takeProfit ? Number(sig.takeProfit) : undefined,
-  indicators: sig.indicators ?? {},
-  createdAt: sig.createdAt ? new Date(sig.createdAt) : null,
-  status: sig.status,
-  confidence: sig.confidence,
-  executedPrice: sig.executedPrice ? Number(sig.executedPrice) : undefined,
-});
-
+interface Signal {
+  id: string;
+  symbol: string;
+  type: 'BUY' | 'SELL';
+  price: number;
+  score: number;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  status: 'PENDING' | 'EXECUTED' | 'EXPIRED';
+  timestamp: string;
+  executedPrice?: number;
+  stopLoss: number;
+  takeProfit: number;
+  liquidationPrice: number;
+  currentMarketPrice: number;
+  interval: string;
+  signal_type: 'buy' | 'sell';
+  indicators: {
+    sma20: number[];
+    sma50: number[];
+    ema20: number[];
+    rsi: number[];
+    macd: { macd: number[]; signal: number[]; histogram: number[] };
+    bollinger: { upper: number[]; middle: number[]; lower: number[] };
+    atr: number[];
+  };
+  entry: number;
+  sl: number;
+  tp: number;
+  trail: number;
+  liquidation: number;
+  margin_usdt: number;
+  bb_slope: string;
+  market: string;
+  leverage: number;
+  risk_reward: number;
+  atr_multiplier: number;
+  created_at: string;
+  signals: string[];
+}
 
 interface MarketData {
   symbol: string;
@@ -77,12 +98,51 @@ interface Balance {
   used: number;
 }
 
+interface ApiConfig {
+  bybitApiKey: string;
+  bybitApiSecret: string;
+  bybitTestnet: boolean;
+}
+
+interface NotificationConfig {
+  discordEnabled: boolean;
+  discordWebhook: string;
+  telegramEnabled: boolean;
+  telegramBotToken: string;
+  telegramChatId: string;
+  whatsappEnabled: boolean;
+  whatsappNumber: string;
+}
+
+interface TradingConfig {
+  maxPositions: number;
+  riskPerTrade: number;
+  leverage: number;
+  stopLossPercent: number;
+  takeProfitPercent: number;
+  scanInterval: number;
+}
+
+interface AppStatus {
+  tradingMode: 'virtual' | 'real';
+  isAutomatedTradingEnabled: boolean;
+}
+
+interface DashboardStats {
+  totalPnL: number;
+  winRate: number;
+  totalTrades: number;
+  activePositions: number;
+}
+
 function App() {
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
   const [isAutomatedTradingEnabled, setIsAutomatedTradingEnabled] = useState(false);
   const [tradingMode, setTradingMode] = useState<"virtual" | "real">("virtual");
   const [isScanning, setIsScanning] = useState(false);
+  const [scanInterval, setScanInterval] = useState("15");
+  const [scanLimit, setScanLimit] = useState(50);
 
   const queryClient = useQueryClient();
 
@@ -95,8 +155,7 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/positions');
       if (!response.ok) throw new Error('Failed to fetch positions');
-      const trades: Trade[] = await response.json();
-      return trades.map(trade => tradeToPosition(trade));
+      return await response.json();
     },
   });
 
@@ -105,18 +164,16 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/signals');
       if (!response.ok) throw new Error('Failed to fetch signals');
-      const rawSignals: Signal[] = await response.json();
-      return rawSignals.map(signalMapper);
+      return await response.json();
     },
   });
-
 
   const { data: marketData = [], isLoading: loadingMarketData, error: errorMarketData } = useQuery<MarketData[]>({
     queryKey: ['market-data'],
     queryFn: async () => {
       const response = await fetch('/api/market-data');
       if (!response.ok) throw new Error('Failed to fetch market data');
-      return response.json();
+      return await response.json();
     },
   });
 
@@ -125,28 +182,25 @@ function App() {
     queryFn: async () => {
       const response = await fetch('/api/balance');
       if (!response.ok) throw new Error('Failed to fetch balance');
-      return response.json();
+      return await response.json();
     },
   });
 
-  const { data: appStatus, isLoading: loadingAppStatus, error: errorAppStatus } = useQuery<{
-    tradingMode: "virtual" | "real",
-    isAutomatedTradingEnabled: boolean
-  }>({
+  const { data: appStatus = { tradingMode: 'virtual', isAutomatedTradingEnabled: false }, isLoading: loadingAppStatus, error: errorAppStatus } = useQuery<AppStatus>({
     queryKey: ['app-status'],
     queryFn: async () => {
-      const response = await fetch('/api/status');
+      const response = await fetch('/api/app-status');
       if (!response.ok) throw new Error('Failed to fetch app status');
-      return response.json();
+      return await response.json();
     },
   });
 
-  const { data: apiConfig = { bybitApiKey: "", bybitApiSecret: "", bybitTestnet: true } } = useQuery({
+  const { data: apiConfig = { bybitApiKey: "", bybitApiSecret: "", bybitTestnet: true } } = useQuery<ApiConfig>({
     queryKey: ['api-config'],
     queryFn: async () => {
-      const response = await fetch('/api/settings/api');
+      const response = await fetch('/api/api-config');
       if (!response.ok) throw new Error('Failed to fetch API config');
-      return response.json();
+      return await response.json();
     },
   });
 
@@ -158,12 +212,12 @@ function App() {
     telegramChatId: "",
     whatsappEnabled: false,
     whatsappNumber: ""
-  } } = useQuery({
+  } } = useQuery<NotificationConfig>({
     queryKey: ['notify-config'],
     queryFn: async () => {
-      const response = await fetch('/api/settings/notify');
+      const response = await fetch('/api/notification-config');
       if (!response.ok) throw new Error('Failed to fetch notification config');
-      return response.json();
+      return await response.json();
     },
   });
 
@@ -174,24 +228,24 @@ function App() {
     stopLossPercent: 5.0,
     takeProfitPercent: 15.0,
     scanInterval: 300
-  } } = useQuery({
+  } } = useQuery<TradingConfig>({
     queryKey: ['trading-config'],
     queryFn: async () => {
-      const response = await fetch('/api/settings/trade');
+      const response = await fetch('/api/trading-config');
       if (!response.ok) throw new Error('Failed to fetch trading config');
-      return response.json();
+      return await response.json();
     },
   });
 
-  const { data: connData } = useQuery({
+  const { data: connectionStatus = 'disconnected' as 'disconnected' | 'connected' | 'testing' | undefined } = useQuery<'disconnected' | 'connected' | 'testing' | undefined>({
     queryKey: ['connection-status'],
     queryFn: async () => {
       const response = await fetch('/api/connection-status');
       if (!response.ok) throw new Error('Failed to fetch connection status');
-      return response.json();
+      const { status } = await response.json();
+      return (['disconnected', 'connected', 'testing'].includes(status) ? status : 'disconnected') as 'disconnected' | 'connected' | 'testing' | undefined;
     },
   });
-  const connectionStatus = connData?.status || 'disconnected';
 
   useEffect(() => {
     if (appStatus) {
@@ -202,14 +256,14 @@ function App() {
 
   // Mutations
   const executeTrade = useMutation({
-    mutationFn: async (trade: any) => {
+    mutationFn: async (trade: { symbol: string; side: 'BUY' | 'SELL'; size: number; type: 'market' | 'limit'; price?: number; stopLoss?: number; takeProfit?: number }) => {
       const response = await fetch('/api/trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(trade),
       });
       if (!response.ok) throw new Error('Failed to execute trade');
-      return response.json();
+      return await response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['positions'] });
@@ -217,23 +271,28 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['balance'] });
       queryClient.invalidateQueries({ queryKey: ['app-status'] });
     },
-    onError: (error) => {
-      console.error('Trade execution failed:', error);
+    onError: (error: any) => {
+      console.error('[App] Trade execution failed:', error.message ?? error);
       alert('Failed to execute trade. Please try again.');
     },
   });
 
   const scanSignals = useMutation({
     mutationFn: async () => {
-      const response = await fetch('/api/scan-signals', { method: 'POST' });
+      const response = await fetch('/api/scan-signals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval: scanInterval, limit: scanLimit }),
+      });
       if (!response.ok) throw new Error('Failed to scan signals');
-      return response.json();
+      return await response.json();
     },
     onSuccess: () => {
       refetchSignals();
+      queryClient.invalidateQueries({ queryKey: ['signals'] });
     },
-    onError: (error) => {
-      console.error('Scan failed:', error);
+    onError: (error: any) => {
+      console.error('[App] Scan signals failed:', error.message ?? error);
       alert('Failed to scan signals. Please try again.');
     },
     onSettled: () => {
@@ -241,9 +300,28 @@ function App() {
     },
   });
 
+  const sendNotifications = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/send-notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signals }),
+      });
+      if (!response.ok) throw new Error('Failed to send notifications');
+      return await response.json();
+    },
+    onSuccess: () => {
+      alert('Notifications sent successfully!');
+    },
+    onError: (error: any) => {
+      console.error('[App] Failed to send notifications:', error.message ?? error);
+      alert('Failed to send notifications. Please try again.');
+    },
+  });
+
   const saveApi = useMutation({
-    mutationFn: async (config: any) => {
-      const response = await fetch('/api/settings/api', {
+    mutationFn: async (config: ApiConfig) => {
+      const response = await fetch('/api/api-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -254,15 +332,15 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['api-config'] });
       alert('API configuration saved successfully!');
     },
-    onError: (error) => {
-      console.error('Failed to save API config:', error);
+    onError: (error: any) => {
+      console.error('[App] Failed to save API config:', error.message ?? error);
       alert('Failed to save API configuration. Please try again.');
     },
   });
 
   const saveNotifications = useMutation({
-    mutationFn: async (config: any) => {
-      const response = await fetch('/api/settings/notify', {
+    mutationFn: async (config: NotificationConfig) => {
+      const response = await fetch('/api/notification-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -273,15 +351,15 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['notify-config'] });
       alert('Notification settings saved successfully!');
     },
-    onError: (error) => {
-      console.error('Failed to save notification config:', error);
+    onError: (error: any) => {
+      console.error('[App] Failed to save notification config:', error.message ?? error);
       alert('Failed to save notification settings. Please try again.');
     },
   });
 
   const saveTrading = useMutation({
-    mutationFn: async (config: any) => {
-      const response = await fetch('/api/settings/trade', {
+    mutationFn: async (config: TradingConfig) => {
+      const response = await fetch('/api/trading-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -292,8 +370,8 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['trading-config'] });
       alert('Trading settings saved successfully!');
     },
-    onError: (error) => {
-      console.error('Failed to save trading config:', error);
+    onError: (error: any) => {
+      console.error('[App] Failed to save trading config:', error.message ?? error);
       alert('Failed to save trading settings. Please try again.');
     },
   });
@@ -302,13 +380,14 @@ function App() {
     mutationFn: async () => {
       const response = await fetch('/api/test-connection', { method: 'POST' });
       if (!response.ok) throw new Error('Failed to test connection');
+      return await response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['connection-status'] });
       alert('Connection test successful!');
     },
-    onError: (error) => {
-      console.error('Connection test failed:', error);
+    onError: (error: any) => {
+      console.error('[App] Connection test failed:', error.message ?? error);
       alert('Connection test failed. Please check your API settings.');
     },
   });
@@ -318,7 +397,7 @@ function App() {
       const response = await fetch('/api/automated-trading', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, mode: tradingMode }),
       });
       if (!response.ok) throw new Error('Failed to toggle automated trading');
     },
@@ -327,18 +406,18 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['app-status'] });
       alert(`Automated trading ${enabled ? 'enabled' : 'disabled'} successfully!`);
     },
-    onError: (error) => {
-      console.error('Failed to toggle automated trading:', error);
+    onError: (error: any) => {
+      console.error('[App] Failed to toggle automated trading:', error.message ?? error);
       alert('Failed to toggle automated trading. Please try again.');
     },
   });
 
   const changeTradingMode = useMutation({
-    mutationFn: async (mode: "virtual" | "real") => {
-      const response = await fetch('/api/trading-mode', {
+    mutationFn: async (mode: 'virtual' | 'real') => {
+      const response = await fetch('/api/app-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ tradingMode: mode, isAutomatedTradingEnabled }),
       });
       if (!response.ok) throw new Error('Failed to change trading mode');
     },
@@ -347,25 +426,34 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ['app-status'] });
       alert(`Switched to ${mode} trading mode successfully!`);
     },
-    onError: (error) => {
-      console.error('Failed to change trading mode:', error);
+    onError: (error: any) => {
+      console.error('[App] Failed to change trading mode:', error.message ?? error);
       alert('Failed to change trading mode. Please try again.');
     },
   });
 
   const emergencyStop = useMutation({
     mutationFn: async () => {
-      const response = await fetch('/api/emergency-stop', { method: 'POST' });
+      const response = await fetch('/api/automated-trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      });
       if (!response.ok) throw new Error('Failed to activate emergency stop');
+      await fetch('/api/app-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tradingMode: 'virtual', isAutomatedTradingEnabled: false }),
+      });
     },
     onSuccess: () => {
       setIsAutomatedTradingEnabled(false);
-      setTradingMode("virtual");
+      setTradingMode('virtual');
       queryClient.invalidateQueries({ queryKey: ['app-status'] });
-      alert("🛑 EMERGENCY STOP ACTIVATED\n\n• All automated trading disabled\n• Switched to virtual mode\n• Please review your positions");
+      alert('🛑 EMERGENCY STOP ACTIVATED\n\n• All automated trading disabled\n• Switched to virtual mode\n• Please review your positions');
     },
-    onError: (error) => {
-      console.error('Emergency stop failed:', error);
+    onError: (error: any) => {
+      console.error('[App] Emergency stop failed:', error.message ?? error);
       alert('Failed to activate emergency stop. Please try again.');
     },
   });
@@ -373,13 +461,13 @@ function App() {
   // WebSocket setup
   useEffect(() => {
     const wsMarket = new WebSocket(`${wsProtocol}://${wsHost}/ws/market-data`);
-    wsMarket.onopen = () => console.log('Market WS connected');
+    wsMarket.onopen = () => console.log('[WebSocket] Market WS connected');
     wsMarket.onmessage = (event) => {
       const update: Partial<MarketData> = JSON.parse(event.data);
       queryClient.setQueryData<MarketData[]>(['market-data'], (old) => {
         if (!old || !update.symbol) return old;
         const index = old.findIndex((d) => d.symbol === update.symbol);
-        if (index === -1) return old;
+        if (index === -1) return [...old, update as MarketData];
         const newData = [...old];
         newData[index] = { ...newData[index], ...update };
         return newData;
@@ -394,21 +482,36 @@ function App() {
         );
       });
     };
-    wsMarket.onclose = () => console.log('Market WS closed');
-    wsMarket.onerror = (error) => console.error('Market WS error:', error);
+    wsMarket.onclose = () => console.log('[WebSocket] Market WS closed');
+    wsMarket.onerror = (error) => console.error('[WebSocket] Market WS error:', error);
 
     const wsPositions = new WebSocket(`${wsProtocol}://${wsHost}/ws/positions`);
-    wsPositions.onopen = () => console.log('Positions WS connected');
-    wsPositions.onmessage = () => {
-      queryClient.invalidateQueries({ queryKey: ['positions'] });
-      queryClient.invalidateQueries({ queryKey: ['balance'] });
+    wsPositions.onopen = () => console.log('[WebSocket] Positions WS connected');
+    wsPositions.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.action === 'update') {
+        queryClient.setQueryData<Position[]>(['positions'], message.data);
+        queryClient.invalidateQueries({ queryKey: ['balance'] });
+      }
     };
-    wsPositions.onclose = () => console.log('Positions WS closed');
-    wsPositions.onerror = (error) => console.error('Positions WS error:', error);
+    wsPositions.onclose = () => console.log('[WebSocket] Positions WS closed');
+    wsPositions.onerror = (error) => console.error('[WebSocket] Positions WS error:', error);
+
+    const wsSignals = new WebSocket(`${wsProtocol}://${wsHost}/ws/signals`);
+    wsSignals.onopen = () => console.log('[WebSocket] Signals WS connected');
+    wsSignals.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.action === 'update') {
+        queryClient.setQueryData<Signal[]>(['signals'], message.data);
+      }
+    };
+    wsSignals.onclose = () => console.log('[WebSocket] Signals WS closed');
+    wsSignals.onerror = (error) => console.error('[WebSocket] Signals WS error:', error);
 
     return () => {
       wsMarket.close();
       wsPositions.close();
+      wsSignals.close();
     };
   }, [queryClient, wsProtocol, wsHost]);
 
@@ -422,7 +525,7 @@ function App() {
     }
     const current = position.currentPrice ?? getCurrentPrice(position.symbol);
     const delta = position.side === 'BUY' ? (current - position.entryPrice) : (position.entryPrice - current);
-    return delta * position.size;
+    return delta * position.size * position.leverage;
   };
 
   const computePnLPercent = (position: Position) => {
@@ -430,18 +533,13 @@ function App() {
       return position.pnlPercent;
     }
     const pnl = computePnL(position);
-    return (pnl / (position.entryPrice * position.size)) * 100;
+    return position.entryPrice * position.size > 0 ? (pnl / (position.entryPrice * position.size)) * 100 : 0;
   };
 
-  const formatDateTime = (date: Date | string | null | undefined) => {
+  const formatDateTime = (date: string | undefined) => {
     if (!date) return 'N/A';
-    
-    const dateObj = typeof date === 'string' ? new Date(date) : date;
-    
-    if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
-      return 'N/A';
-    }
-    
+    const dateObj = new Date(date);
+    if (isNaN(dateObj.getTime())) return 'N/A';
     return dateObj.toLocaleDateString() + " " + 
            dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -454,12 +552,12 @@ function App() {
   const handleExecuteSignal = (signal: Signal) => {
     const trade = {
       symbol: signal.symbol,
-      side: signal.signalType,
-      quantity: 0, // TODO: Calculate based on risk management
-      price: signal.entryPrice,
+      side: signal.type,
+      size: (tradingConfig.riskPerTrade / 100) * balance.available / signal.currentMarketPrice * signal.leverage,
+      type: 'market' as const,
+      price: signal.currentMarketPrice,
       stopLoss: signal.stopLoss,
       takeProfit: signal.takeProfit,
-      leverage: tradingConfig.leverage,
     };
     executeTrade.mutate(trade);
   };
@@ -467,30 +565,31 @@ function App() {
   // Compute dashboard stats
   const stats: DashboardStats = {
     totalPnL: positions.reduce((sum, p) => sum + computePnL(p), 0),
-    winRate: positions.filter(p => p.status === "CLOSED" && p.pnl > 0).length / Math.max(positions.filter(p => p.status === "CLOSED").length, 1) * 100,
+    winRate: positions.filter(p => p.status === 'CLOSED' && p.pnl > 0).length / 
+             Math.max(positions.filter(p => p.status === 'CLOSED').length, 1) * 100,
     totalTrades: positions.length,
-    activePositions: positions.filter(p => p.status === "OPEN").length,
+    activePositions: positions.filter(p => p.status === 'OPEN').length,
   };
 
   const dailyPnL = positions
     .filter(p => {
-      if (p.status !== "CLOSED" || !p.closeTime) return false;
-      const closeDate = typeof p.closeTime === 'string' ? new Date(p.closeTime) : p.closeTime;
-      return closeDate instanceof Date && !isNaN(closeDate.getTime()) && closeDate.toDateString() === new Date().toDateString();
+      if (p.status !== 'CLOSED' || !p.closeTime) return false;
+      const closeDate = new Date(p.closeTime);
+      return closeDate.toDateString() === new Date().toDateString();
     })
     .reduce((sum, p) => sum + p.pnl, 0);
 
   const renderPage = () => {
     switch (currentPage) {
-      case "positions":
+      case 'positions':
         return (
           <div className="p-6 space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold">Positions</h2>
               <div className="flex gap-2 text-sm text-muted-foreground">
-                <span>{positions.filter(p => p.status === "OPEN").length} Open</span>
+                <span>{positions.filter(p => p.status === 'OPEN').length} Open</span>
                 <span>•</span>
-                <span>{positions.filter(p => p.status === "CLOSED").length} Closed</span>
+                <span>{positions.filter(p => p.status === 'CLOSED').length} Closed</span>
               </div>
             </div>
 
@@ -501,7 +600,7 @@ function App() {
                   <Activity className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">{positions.filter(p => p.status === "OPEN").length}</div>
+                  <div className="text-2xl font-bold font-mono">{positions.filter(p => p.status === 'OPEN').length}</div>
                   <p className="text-xs text-muted-foreground">Active trades</p>
                 </CardContent>
               </Card>
@@ -512,8 +611,8 @@ function App() {
                   <DollarSign className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold font-mono ${stats.totalPnL >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
-                    {stats.totalPnL >= 0 ? "+" : ""}${stats.totalPnL.toFixed(2)}
+                  <div className={`text-2xl font-bold font-mono ${stats.totalPnL >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
+                    {stats.totalPnL >= 0 ? '+' : ''}${stats.totalPnL.toFixed(2)}
                   </div>
                   <p className="text-xs text-muted-foreground">All time</p>
                 </CardContent>
@@ -525,8 +624,8 @@ function App() {
                   <Clock className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold font-mono ${dailyPnL >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
-                    {dailyPnL >= 0 ? "+" : ""}${dailyPnL.toFixed(2)}
+                  <div className={`text-2xl font-bold font-mono ${dailyPnL >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
+                    {dailyPnL >= 0 ? '+' : ''}${dailyPnL.toFixed(2)}
                   </div>
                   <p className="text-xs text-muted-foreground">Today</p>
                 </CardContent>
@@ -546,18 +645,18 @@ function App() {
 
             <Tabs defaultValue="open" className="w-full">
               <TabsList>
-                <TabsTrigger value="open">Open ({positions.filter(p => p.status === "OPEN").length})</TabsTrigger>
-                <TabsTrigger value="closed">Closed ({positions.filter(p => p.status === "CLOSED").length})</TabsTrigger>
+                <TabsTrigger value="open">Open ({positions.filter(p => p.status === 'OPEN').length})</TabsTrigger>
+                <TabsTrigger value="closed">Closed ({positions.filter(p => p.status === 'CLOSED').length})</TabsTrigger>
               </TabsList>
 
               <TabsContent value="open" className="space-y-4">
-                {positions.filter(p => p.status === "OPEN").map((position) => (
+                {positions.filter(p => p.status === 'OPEN').map((position) => (
                   <Card key={position.id}>
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            {position.side === "BUY" ? (
+                            {position.side === 'BUY' ? (
                               <TrendingUp className="w-4 h-4 text-trading-profit" />
                             ) : (
                               <TrendingDown className="w-4 h-4 text-trading-loss" />
@@ -567,27 +666,27 @@ function App() {
                           <div>
                             <div className="font-semibold">Entry: ${position.entryPrice.toFixed(2)}</div>
                             <div className="text-sm text-muted-foreground">
-                              Size: {position.size.toFixed(6)}
+                              Size: {position.size.toFixed(6)} • Lev: {position.leverage}x
                             </div>
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className={`font-bold ${computePnL(position) >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
-                            {computePnL(position) >= 0 ? "+" : ""}${computePnL(position).toFixed(2)}
+                          <div className={`font-bold ${computePnL(position) >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
+                            {computePnL(position) >= 0 ? '+' : ''}${computePnL(position).toFixed(2)}
                           </div>
-                          <div className={`text-sm ${computePnLPercent(position) >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                          <div className={`text-sm ${computePnLPercent(position) >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
                             {computePnLPercent(position).toFixed(2)}%
                           </div>
                         </div>
                       </div>
                       <div className="mt-2 text-xs text-muted-foreground flex justify-between">
                         <span>Open: {formatDateTime(position.openTime)}</span>
-                        <span>Lev: {position.leverage}x</span>
+                        <span>Current: ${position.currentPrice?.toFixed(2) ?? getCurrentPrice(position.symbol).toFixed(2)}</span>
                       </div>
                     </CardContent>
                   </Card>
                 ))}
-                {positions.filter(p => p.status === "OPEN").length === 0 && (
+                {positions.filter(p => p.status === 'OPEN').length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No open positions
                   </div>
@@ -595,13 +694,13 @@ function App() {
               </TabsContent>
 
               <TabsContent value="closed" className="space-y-4">
-                {positions.filter(p => p.status === "CLOSED").map((position) => (
+                {positions.filter(p => p.status === 'CLOSED').map((position) => (
                   <Card key={position.id}>
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            {position.side === "BUY" ? (
+                            {position.side === 'BUY' ? (
                               <TrendingUp className="w-4 h-4 text-muted-foreground" />
                             ) : (
                               <TrendingDown className="w-4 h-4 text-muted-foreground" />
@@ -613,22 +712,22 @@ function App() {
                               Entry: ${position.entryPrice.toFixed(2)} • Exit: ${position.exitPrice?.toFixed(2) ?? 'N/A'}
                             </div>
                             <div className="text-sm text-muted-foreground">
-                              Size: {position.size.toFixed(6)}
+                              Size: ${position.size.toFixed(6)} • Lev: ${position.leverage}x
                             </div>
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className={`font-bold ${position.pnl >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
-                            {position.pnl >= 0 ? "+" : ""}${position.pnl.toFixed(2)}
+                          <div className={`font-bold ${position.pnl >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
+                            {position.pnl >= 0 ? '+' : ''}${position.pnl.toFixed(2)}
                           </div>
-                          <div className={`text-sm ${position.pnlPercent >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
+                          <div className={`text-sm ${position.pnlPercent >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
                             {position.pnlPercent.toFixed(2)}%
                           </div>
                         </div>
                       </div>
                       <div className="mt-2 text-xs text-muted-foreground flex justify-between">
-                        <span>Open: {formatDateTime(position.openTime)}</span>
-                        <span>Close: {formatDateTime(position.closeTime)}</span>
+                        <span>Open: ${formatDateTime(position.openTime)}</span>
+                        <span>Close: ${formatDateTime(position.closeTime)}</span>
                       </div>
                       <div className="mt-1 flex justify-end">
                         <div className="flex items-center gap-1 text-sm">
@@ -642,7 +741,7 @@ function App() {
                     </CardContent>
                   </Card>
                 ))}
-                {positions.filter(p => p.status === "CLOSED").length === 0 && (
+                {positions.filter(p => p.status === 'CLOSED').length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No closed positions
                   </div>
@@ -652,12 +751,35 @@ function App() {
           </div>
         );
 
-      case "signals":
+      case 'signals':
         return (
           <div className="p-6 space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold">Trading Signals</h2>
               <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-muted-foreground">Interval:</label>
+                  <select
+                    value={scanInterval}
+                    onChange={(e) => setScanInterval(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm"
+                  >
+                    <option value="5">5m</option>
+                    <option value="15">15m</option>
+                    <option value="30">30m</option>
+                    <option value="60">1h</option>
+                    <option value="240">4h</option>
+                  </select>
+                  <label className="text-sm text-muted-foreground">Limit:</label>
+                  <input
+                    type="number"
+                    value={scanLimit}
+                    onChange={(e) => setScanLimit(Number(e.target.value))}
+                    className="border rounded px-2 py-1 w-16 text-sm"
+                    min="1"
+                    max="100"
+                  />
+                </div>
                 <Button 
                   onClick={handleScanSignals}
                   disabled={isScanning}
@@ -666,13 +788,14 @@ function App() {
                   <Activity className={`w-4 h-4 ${isScanning ? 'animate-spin' : ''}`} />
                   {isScanning ? 'Scanning...' : 'Scan Signals'}
                 </Button>
-                <div className="flex gap-2 text-sm text-muted-foreground">
-                  <span>{signals.filter(s => s.status === "PENDING").length} Pending</span>
-                  <span>•</span>
-                  <span>{signals.filter(s => s.status === "EXECUTED").length} Executed</span>
-                  <span>•</span>
-                  <span>{signals.filter(s => s.status === "EXPIRED").length} Expired</span>
-                </div>
+                <Button
+                  onClick={() => sendNotifications.mutate()}
+                  disabled={signals.length === 0}
+                  className="flex items-center gap-2"
+                >
+                  <Send className="w-4 h-4" />
+                  Send Notifications
+                </Button>
               </div>
             </div>
 
@@ -683,7 +806,7 @@ function App() {
                   <Clock className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">{signals.filter(s => s.status === "PENDING").length}</div>
+                  <div className="text-2xl font-bold font-mono">{signals.filter(s => s.status === 'PENDING').length}</div>
                   <p className="text-xs text-muted-foreground">Awaiting execution</p>
                 </CardContent>
               </Card>
@@ -695,7 +818,7 @@ function App() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold font-mono">
-                    {((signals.filter(s => s.status === "EXECUTED").length / Math.max(signals.length, 1)) * 100).toFixed(0)}%
+                    {((signals.filter(s => s.status === 'EXECUTED').length / Math.max(signals.length, 1)) * 100).toFixed(0)}%
                   </div>
                   <p className="text-xs text-muted-foreground">Success rate</p>
                 </CardContent>
@@ -707,7 +830,7 @@ function App() {
                   <TrendingUp className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold font-mono">{signals.filter(s => s.confidence === "HIGH").length}</div>
+                  <div className="text-2xl font-bold font-mono">{signals.filter(s => s.confidence === 'HIGH').length}</div>
                   <p className="text-xs text-muted-foreground">Strong signals</p>
                 </CardContent>
               </Card>
@@ -715,26 +838,26 @@ function App() {
 
             <Tabs defaultValue="pending" className="w-full">
               <TabsList>
-                <TabsTrigger value="pending">Pending ({signals.filter(s => s.status === "PENDING").length})</TabsTrigger>
+                <TabsTrigger value="pending">Pending ({signals.filter(s => s.status === 'PENDING').length})</TabsTrigger>
                 <TabsTrigger value="executed">Executed</TabsTrigger>
                 <TabsTrigger value="expired">Expired</TabsTrigger>
               </TabsList>
 
               <TabsContent value="pending" className="space-y-4">
-                {signals.filter(s => s.status === "PENDING").map((signal) => (
+                {signals.filter(s => s.status === 'PENDING').map((signal) => (
                   <Card key={signal.id}>
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            {signal.signalType === "BUY" ? (
+                            {signal.type === 'BUY' ? (
                               <TrendingUp className="w-4 h-4 text-trading-profit" />
                             ) : (
                               <TrendingDown className="w-4 h-4 text-trading-loss" />
                             )}
                             <Badge 
-                              variant={signal.confidence === "HIGH" ? "default" : 
-                                       signal.confidence === "MEDIUM" ? "secondary" : "outline"}
+                              variant={signal.confidence === 'HIGH' ? 'default' : 
+                                      signal.confidence === 'MEDIUM' ? 'secondary' : 'outline'}
                             >
                               {signal.confidence}
                             </Badge>
@@ -742,14 +865,20 @@ function App() {
                           <div>
                             <div className="font-semibold">{signal.symbol}</div>
                             <div className="text-sm text-muted-foreground">
-                              {signal.signalType} @ ${signal.entryPrice.toFixed(2)} • Score: {signal.score}
+                              {signal.type} @ ${signal.currentMarketPrice.toFixed(2)} • Score: {signal.score.toFixed(1)}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              SL: ${signal.stopLoss.toFixed(2)} • TP: ${signal.takeProfit.toFixed(2)} • Lev: {signal.leverage}x
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              R/R: {signal.risk_reward.toFixed(2)} • Interval: {signal.interval}m
                             </div>
                           </div>
                         </div>
                         <div className="text-sm text-muted-foreground">
                           <div className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatDateTime(signal.createdAt)}
+                            {formatDateTime(signal.created_at)}
                           </div>
                         </div>
                         <Button size="sm" variant="default" onClick={() => handleExecuteSignal(signal)}>
@@ -759,7 +888,7 @@ function App() {
                     </CardContent>
                   </Card>
                 ))}
-                {signals.filter(s => s.status === "PENDING").length === 0 && (
+                {signals.filter(s => s.status === 'PENDING').length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No pending signals
                   </div>
@@ -767,20 +896,20 @@ function App() {
               </TabsContent>
 
               <TabsContent value="executed" className="space-y-4">
-                {signals.filter(s => s.status === "EXECUTED").map((signal) => (
+                {signals.filter(s => s.status === 'EXECUTED').map((signal) => (
                   <Card key={signal.id}>
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            {signal.signalType === "BUY" ? (
+                            {signal.type === 'BUY' ? (
                               <TrendingUp className="w-4 h-4 text-trading-profit" />
                             ) : (
                               <TrendingDown className="w-4 h-4 text-trading-loss" />
                             )}
                             <Badge 
-                              variant={signal.confidence === "HIGH" ? "default" : 
-                                       signal.confidence === "MEDIUM" ? "secondary" : "outline"}
+                              variant={signal.confidence === 'HIGH' ? 'default' : 
+                                      signal.confidence === 'MEDIUM' ? 'secondary' : 'outline'}
                             >
                               {signal.confidence}
                             </Badge>
@@ -788,14 +917,17 @@ function App() {
                           <div>
                             <div className="font-semibold">{signal.symbol}</div>
                             <div className="text-sm text-muted-foreground">
-                              {signal.signalType} • Target: ${signal.entryPrice.toFixed(2)} • Executed: ${signal.executedPrice?.toFixed(2) || 'N/A'}
+                              {signal.type} • Target: ${signal.price.toFixed(2)} • Executed: ${signal.executedPrice?.toFixed(2) || 'N/A'}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              SL: ${signal.stopLoss.toFixed(2)} • TP: ${signal.takeProfit.toFixed(2)} • Lev: ${signal.leverage}x
                             </div>
                           </div>
                         </div>
                         <div className="text-sm text-muted-foreground">
                           <div className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatDateTime(signal.createdAt)}
+                            {formatDateTime(signal.created_at)}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -806,7 +938,7 @@ function App() {
                     </CardContent>
                   </Card>
                 ))}
-                {signals.filter(s => s.status === "EXECUTED").length === 0 && (
+                {signals.filter(s => s.status === 'EXECUTED').length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No executed signals
                   </div>
@@ -814,13 +946,13 @@ function App() {
               </TabsContent>
 
               <TabsContent value="expired" className="space-y-4">
-                {signals.filter(s => s.status === "EXPIRED").map((signal) => (
+                {signals.filter(s => s.status === 'EXPIRED').map((signal) => (
                   <Card key={signal.id}>
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2">
-                            {signal.signalType === "BUY" ? (
+                            {signal.type === 'BUY' ? (
                               <TrendingUp className="w-4 h-4 text-muted-foreground" />
                             ) : (
                               <TrendingDown className="w-4 h-4 text-muted-foreground" />
@@ -832,14 +964,17 @@ function App() {
                           <div>
                             <div className="font-semibold text-muted-foreground">{signal.symbol}</div>
                             <div className="text-sm text-muted-foreground">
-                              {signal.signalType} @ ${signal.entryPrice.toFixed(2)} • Score: ${signal.score}
+                              {signal.type} @ ${signal.price.toFixed(2)} • Score: ${signal.score.toFixed(1)}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              SL: ${signal.stopLoss.toFixed(2)} • TP: ${signal.takeProfit.toFixed(2)} • Lev: ${signal.leverage}x
                             </div>
                           </div>
                         </div>
                         <div className="text-sm text-muted-foreground">
                           <div className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatDateTime(signal.createdAt)}
+                            {formatDateTime(signal.created_at)}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -850,7 +985,7 @@ function App() {
                     </CardContent>
                   </Card>
                 ))}
-                {signals.filter(s => s.status === "EXPIRED").length === 0 && (
+                {signals.filter(s => s.status === 'EXPIRED').length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">
                     No expired signals
                   </div>
@@ -860,10 +995,10 @@ function App() {
           </div>
         );
 
-      case "analytics":
+      case 'analytics':
         return <AnalyticsPage />;
 
-      case "settings":
+      case 'settings':
         return (
           <SettingsPanel
             apiConfig={apiConfig}
@@ -887,8 +1022,8 @@ function App() {
                   <DollarSign className="h-4 w-4 text-muted-foreground" />
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold font-mono ${stats.totalPnL >= 0 ? "text-trading-profit" : "text-trading-loss"}`}>
-                    {stats.totalPnL >= 0 ? "+" : ""}${stats.totalPnL.toFixed(2)}
+                  <div className={`text-2xl font-bold font-mono ${stats.totalPnL >= 0 ? 'text-trading-profit' : 'text-trading-loss'}`}>
+                    {stats.totalPnL >= 0 ? '+' : ''}${stats.totalPnL.toFixed(2)}
                   </div>
                   <p className="text-xs text-muted-foreground">All positions</p>
                 </CardContent>
@@ -938,7 +1073,15 @@ function App() {
                 selectedSymbol={selectedSymbol}
                 currentPrice={getCurrentPrice(selectedSymbol)}
                 balance={{ available: balance.available, used: balance.used }}
-                onExecuteTrade={(trade) => executeTrade.mutate(trade)}
+                onExecuteTrade={(trade) => executeTrade.mutate({
+                  symbol: trade.symbol,
+                  side: trade.side,
+                  size: trade.quantity,
+                  type: trade.price === getCurrentPrice(trade.symbol) ? 'market' : 'limit',
+                  price: trade.price,
+                  stopLoss: trade.stopLoss,
+                  takeProfit: trade.takeProfit,
+                })}
               />
             </div>
           </div>
@@ -958,8 +1101,8 @@ function App() {
               currentPage={currentPage}
               onPageChange={setCurrentPage}
               stats={{
-                activePositions: positions.filter(p => p.status === "OPEN").length,
-                pendingSignals: signals.filter(s => s.status === "PENDING").length,
+                activePositions: positions.filter(p => p.status === 'OPEN').length,
+                pendingSignals: signals.filter(s => s.status === 'PENDING').length,
                 dailyPnL,
                 isAutomatedTradingEnabled
               }}
@@ -968,8 +1111,8 @@ function App() {
               <TradingHeader
                 tradingMode={tradingMode}
                 onTradingModeChange={(mode) => {
-                  if (mode === "real") {
-                    if (!confirm("⚠️ Warning: You are switching to LIVE trading mode. Real money will be at risk!")) return;
+                  if (mode === 'real') {
+                    if (!confirm('⚠️ Warning: You are switching to LIVE trading mode. Real money will be at risk!')) return;
                   }
                   changeTradingMode.mutate(mode);
                 }}

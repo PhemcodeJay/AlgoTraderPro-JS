@@ -1,60 +1,109 @@
-// indicators.ts
-export function SMA(data: number[], period: number): number {
-  if (data.length < period) return 0;
-  const slice = data.slice(-period);
-  const sum = slice.reduce((a, b) => a + b, 0);
-  return sum / period;
+export interface IndicatorData {
+  sma20: number[];
+  sma50: number[];
+  ema20: number[];
+  rsi: number[];
+  macd: { macd: number[]; signal: number[]; histogram: number[] };
+  bollinger: { upper: number[]; middle: number[]; lower: number[] };
+  atr: number[];
 }
 
-export function EMA(data: number[], period: number): number {
-  if (data.length < period) return 0;
+export interface EnhancedSignalScore {
+  buyScore: number;
+  sellScore: number;
+  signals: string[];
+}
+
+export function SMA(data: number[], period: number): number[] {
+  if (data.length < period) return new Array(data.length).fill(0);
+  const sma: number[] = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      sma.push(0);
+    } else {
+      const slice = data.slice(i - period + 1, i + 1);
+      const sum = slice.reduce((a, b) => a + b, 0);
+      sma.push(sum / period);
+    }
+  }
+  return sma;
+}
+
+export function EMA(data: number[], period: number): number[] {
+  if (data.length < period) return new Array(data.length).fill(0);
   const k = 2 / (period + 1);
-  let ema = SMA(data.slice(0, period), period);
-  for (let i = period; i < data.length; i++) {
-    ema = data[i] * k + ema * (1 - k);
+  const ema: number[] = [data[0]]; // Start with first price
+  for (let i = 1; i < data.length; i++) {
+    const emaVal = data[i] * k + ema[ema.length - 1] * (1 - k);
+    ema.push(emaVal);
   }
   return ema;
 }
 
-export function RSI(data: number[], period: number): number {
-  if (data.length < period + 1) return 0;
-  let gains = 0;
-  let losses = 0;
-  for (let i = data.length - period; i < data.length; i++) {
+export function RSI(data: number[], period: number = 14): number[] {
+  if (data.length < period + 1) return new Array(data.length).fill(50);
+  const gains: number[] = [];
+  const losses: number[] = [];
+  for (let i = 1; i < data.length; i++) {
     const change = data[i] - data[i - 1];
-    if (change > 0) gains += change;
-    else losses -= change;
+    gains.push(change > 0 ? change : 0);
+    losses.push(change < 0 ? Math.abs(change) : 0);
   }
-  const rs = losses === 0 ? 100 : gains / losses;
-  return 100 - 100 / (1 + rs);
+  const rsi: number[] = [50];
+  for (let i = period; i < gains.length; i++) {
+    const avgGain = gains.slice(i - period, i).reduce((a, b) => a + b, 0) / period;
+    const avgLoss = losses.slice(i - period, i).reduce((a, b) => a + b, 0) / period;
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    const rsiVal = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+    rsi.push(rsiVal);
+  }
+  while (rsi.length < data.length) {
+    rsi.unshift(50);
+  }
+  return rsi;
 }
 
-export function MACD(data: number[], fast = 12, slow = 26, signalPeriod = 9) {
+export function MACD(data: number[], fast: number = 12, slow: number = 26, signalPeriod: number = 9) {
+  if (data.length < slow) {
+    return { macd: new Array(data.length).fill(0), signal: new Array(data.length).fill(0), histogram: new Array(data.length).fill(0) };
+  }
   const emaFast = EMA(data, fast);
   const emaSlow = EMA(data, slow);
-  const macdLine = emaFast - emaSlow;
-  const signalLine = EMA([...data.slice(-signalPeriod), macdLine], signalPeriod);
-  const histogram = macdLine - signalLine;
-  return { macdLine, signalLine, histogram };
+  const macdLine = emaFast.map((fast, i) => fast - emaSlow[i]);
+  const signalLine = EMA(macdLine, signalPeriod);
+  const histogram = macdLine.map((macd, i) => macd - signalLine[i]);
+  return { macd: macdLine, signal: signalLine, histogram };
 }
 
-export function BollingerBands(data: number[], period = 20, multiplier = 2) {
-  if (data.length < period) return { upper: 0, middle: 0, lower: 0 };
-  const slice = data.slice(-period);
-  const middle = SMA(slice, period);
-  const variance = slice.reduce((sum, val) => sum + Math.pow(val - middle, 2), 0) / period;
-  const stdDev = Math.sqrt(variance);
-  return {
-    upper: middle + multiplier * stdDev,
-    middle,
-    lower: middle - multiplier * stdDev,
-  };
+export function BollingerBands(data: number[], period: number = 20, multiplier: number = 2) {
+  if (data.length < period) {
+    return { upper: new Array(data.length).fill(0), middle: new Array(data.length).fill(0), lower: new Array(data.length).fill(0) };
+  }
+  const middle = SMA(data, period);
+  const upper: number[] = [];
+  const lower: number[] = [];
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) {
+      upper.push(0);
+      lower.push(0);
+    } else {
+      const slice = data.slice(i - period + 1, i + 1);
+      const mean = middle[i];
+      const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
+      const stdDev = Math.sqrt(variance);
+      upper.push(mean + multiplier * stdDev);
+      lower.push(mean - multiplier * stdDev);
+    }
+  }
+  return { upper, middle, lower };
 }
 
-export function ATR(high: number[], low: number[], close: number[], period = 14) {
-  if (high.length < period + 1 || low.length < period + 1 || close.length < period + 1) return 0;
+export function ATR(high: number[], low: number[], close: number[], period: number = 14): number[] {
+  if (high.length < period + 1 || high.length !== low.length || high.length !== close.length) {
+    return new Array(high.length).fill(0);
+  }
   const trs: number[] = [];
-  for (let i = 1; i < close.length; i++) {
+  for (let i = 1; i < high.length; i++) {
     const tr = Math.max(
       high[i] - low[i],
       Math.abs(high[i] - close[i - 1]),
@@ -62,72 +111,141 @@ export function ATR(high: number[], low: number[], close: number[], period = 14)
     );
     trs.push(tr);
   }
-  return SMA(trs.slice(-period), period);
+  const atr: number[] = [0];
+  for (let i = period; i < trs.length + 1; i++) {
+    const atrVal = trs.slice(i - period, i).reduce((a, b) => a + b, 0) / period;
+    atr.push(atrVal);
+  }
+  while (atr.length < high.length) {
+    atr.push(atr[atr.length - 1] || 0);
+  }
+  return atr;
 }
 
-// Enhanced signal scoring
-export interface EnhancedSignalScore {
-  buyScore: number;
-  sellScore: number;
-}
-
-/**
- * Calculate score for a signal using multiple indicators
- */
-export function scoreSignal(closes: number[], highs: number[], lows: number[]): EnhancedSignalScore {
-  if (closes.length < 20) return { buyScore: 0, sellScore: 0 };
-  const price = closes[closes.length - 1];
-
-  // --- Moving averages ---
-  const shortMA = SMA(closes, 5);
-  const longMA = SMA(closes, 20);
-  const emaShort = EMA(closes, 12);
-  const emaLong = EMA(closes, 26);
-
-  // --- RSI ---
+export function calculateIndicators(closes: number[], highs: number[], lows: number[], volumes: number[]): IndicatorData {
+  if (closes.length < 20) return {
+    sma20: [], sma50: [], ema20: [], rsi: [], macd: { macd: [], signal: [], histogram: [] }, bollinger: { upper: [], middle: [], lower: [] }, atr: []
+  };
+  const sma20 = SMA(closes, 20);
+  const sma50 = SMA(closes, 50);
+  const ema20 = EMA(closes, 20);
   const rsi = RSI(closes, 14);
-
-  // --- MACD ---
   const macd = MACD(closes);
-  const macdTrend = macd.histogram > 0 ? 1 : -1;
-
-  // --- Bollinger Bands ---
-  const bb = BollingerBands(closes, 20);
-
-  // --- ATR ---
+  const bollinger = BollingerBands(closes);
   const atr = ATR(highs, lows, closes, 14);
+  return { sma20, sma50, ema20, rsi, macd, bollinger, atr };
+}
 
-  // --- Score calculation ---
+export function scoreSignal(closes: number[], highs: number[], lows: number[], volumes: number[]): EnhancedSignalScore {
+  if (closes.length < 20) return { buyScore: 0, sellScore: 0, signals: [] };
+  const indicators = calculateIndicators(closes, highs, lows, volumes);
+  const price = closes[closes.length - 1];
   let buyScore = 0;
   let sellScore = 0;
+  const signals: string[] = [];
 
-  // MA & EMA trend
-  if (shortMA > longMA) buyScore += 20;
-  else sellScore += 20;
+  // RSI signals
+  const rsi = indicators.rsi[indicators.rsi.length - 1] || 50;
+  if (rsi < 30) {
+    buyScore += 25;
+    signals.push("RSI_OVERSOLD");
+  } else if (rsi > 70) {
+    sellScore += 25;
+    signals.push("RSI_OVERBOUGHT");
+  } else if (20 <= rsi && rsi <= 30) {
+    buyScore += 10;
+    signals.push("RSI_NEAR_OVERSOLD");
+  } else if (70 <= rsi && rsi <= 80) {
+    sellScore += 10;
+    signals.push("RSI_NEAR_OVERBOUGHT");
+  } else if (rsi < 20) {
+    buyScore += 5;
+    signals.push("RSI_EXTREME_OVERSOLD");
+  } else if (rsi > 80) {
+    sellScore += 5;
+    signals.push("RSI_EXTREME_OVERBOUGHT");
+  }
 
-  if (emaShort > emaLong) buyScore += 15;
-  else sellScore += 15;
+  // MACD signals
+  const macd = indicators.macd.macd[indicators.macd.macd.length - 1] || 0;
+  const macdSignal = indicators.macd.signal[indicators.macd.signal.length - 1] || 0;
+  const macdHist = indicators.macd.histogram[indicators.macd.histogram.length - 1] || 0;
+  if (macd > macdSignal && macdHist > 0) {
+    buyScore += 20;
+    signals.push("MACD_BULLISH");
+  } else if (macd < macdSignal && macdHist < 0) {
+    sellScore += 20;
+    signals.push("MACD_BEARISH");
+  }
+  if (Math.abs(macdHist) > 0.01) {
+    buyScore += 8;
+    sellScore += 8;
+    signals.push("MACD_STRONG");
+  }
 
-  // RSI
-  if (rsi < 30) buyScore += 15;
-  else if (rsi > 70) sellScore += 15;
+  // Bollinger Bands signals
+  const bbUpper = indicators.bollinger.upper[indicators.bollinger.upper.length - 1] || 0;
+  const bbLower = indicators.bollinger.lower[indicators.bollinger.lower.length - 1] || 0;
+  if (price <= bbLower) {
+    buyScore += 15;
+    signals.push("BB_OVERSOLD");
+  } else if (price >= bbUpper) {
+    sellScore += 15;
+    signals.push("BB_OVERBOUGHT");
+  }
 
-  // MACD
-  if (macdTrend > 0) buyScore += 15;
-  else sellScore += 15;
+  // Volume analysis
+  const avgVolume = volumes.slice(-10).reduce((a, b) => a + b, 0) / Math.min(10, volumes.length) || 1;
+  const volumeRatio = volumes[volumes.length - 1] / avgVolume;
+  if (volumeRatio > 2) {
+    buyScore += 12;
+    sellScore += 12;
+    signals.push("VOLUME_VERY_HIGH");
+  } else if (volumeRatio > 1.5) {
+    buyScore += 6;
+    sellScore += 6;
+    signals.push("VOLUME_HIGH");
+  }
 
-  // Bollinger Bands
-  if (price < bb.lower) buyScore += 10;
-  else if (price > bb.upper) sellScore += 10;
+  // Trend signals
+  let trendScore = 0;
+  if (indicators.sma20.length > 1 && indicators.sma50.length > 1) {
+    if (indicators.sma20[indicators.sma20.length - 1] > indicators.sma50[indicators.sma50.length - 1]) {
+      trendScore += 1;
+      signals.push("SMA20_ABOVE_SMA50");
+    }
+    if (price > indicators.sma20[indicators.sma20.length - 1]) {
+      trendScore += 1;
+      signals.push("PRICE_ABOVE_SMA20");
+    }
+    if (indicators.sma20[indicators.sma20.length - 1] > indicators.sma20[indicators.sma20.length - 2]) {
+      trendScore += 1;
+      signals.push("SMA20_UPTREND");
+    }
+  }
+  buyScore += trendScore * 3;
+  sellScore += trendScore * 3;
+  if (trendScore >= 2) {
+    buyScore += 15;
+    signals.push("TREND_BULLISH");
+  }
 
-  // ATR for volatility
-  const atrScore = Math.min(atr / price, 0.1) * 100;
-  buyScore += atrScore;
-  sellScore += atrScore;
+  // Volatility
+  const atr = indicators.atr[indicators.atr.length - 1] || 0;
+  const volatility = price > 0 ? (atr / price * 100) : 0;
+  if (0.5 <= volatility && volatility <= 3) {
+    buyScore += 5;
+    sellScore += 5;
+    signals.push("VOLATILITY_NORMAL");
+  } else if (volatility > 5) {
+    buyScore -= 10;
+    sellScore -= 10;
+    signals.push("VOLATILITY_HIGH");
+  }
 
-  // Clip to 0-100
-  buyScore = Math.min(Math.max(buyScore, 0), 100);
-  sellScore = Math.min(Math.max(sellScore, 0), 100);
-
-  return { buyScore, sellScore };
+  return {
+    buyScore: Math.min(Math.max(buyScore, 0), 100),
+    sellScore: Math.min(Math.max(sellScore, 0), 100),
+    signals
+  };
 }

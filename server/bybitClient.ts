@@ -1,8 +1,8 @@
-// bybitClient.ts
 import { RestClientV5, WebsocketClient } from 'bybit-api';
 import dotenv from 'dotenv';
 import { storage, Position, MarketData, Balance, Signal } from './storage';
 import { randomUUID } from 'crypto';
+import { IndicatorData, calculateIndicators } from './indicators';
 
 dotenv.config();
 
@@ -139,6 +139,10 @@ export async function getPositions(): Promise<Position[]> {
         : undefined,
       exitPrice: parseFloat(pos.size) === 0 && pos.avgPrice ? parseFloat(pos.avgPrice) : undefined,
       leverage: parseFloat(pos.leverage) || 10,
+      stopLoss: parseFloat(pos.stopLoss) || undefined,
+      takeProfit: parseFloat(pos.takeProfit) || undefined,
+      liquidationPrice: parseFloat(pos.liqPrice) || undefined,
+      trailingStop: parseFloat(pos.trailingStop) || undefined,
     }));
     await storage.setPositions(positions);
     return positions;
@@ -167,14 +171,17 @@ export async function getBalance(): Promise<Balance> {
 }
 
 // --- Scan trading signals ---
-export async function scanSignals(): Promise<Signal[]> {
+export async function scanSignals(interval: string = '15', limit: number = 50): Promise<Signal[]> {
   const symbols = ['BTCUSDT', 'ETHUSDT'];
   const signals: Signal[] = [];
+  const tradingConfig = await storage.getTradingConfig();
 
   for (const symbol of symbols) {
     try {
-      const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval: '15', limit: 50 });
+      const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval, limit });
       const closes = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
+      const highs = kline.result.list.map((c: any) => parseFloat(c[2])).reverse();
+      const lows = kline.result.list.map((c: any) => parseFloat(c[3])).reverse();
       if (closes.length < 20) continue;
 
       const shortMA = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
@@ -185,15 +192,57 @@ export async function scanSignals(): Promise<Signal[]> {
       if (shortMA < longMA) type = 'SELL';
 
       if (type) {
+        const currentPrice = closes[closes.length - 1];
+        const indicators = calculateIndicators({ open: [], high: highs, low: lows, close: closes, volume: [] });
+        const atr = indicators.atr[indicators.atr.length - 1] || 0;
+        const leverage = tradingConfig.leverage || 10;
+        const riskReward = 2;
+        const atrMultiplier = 2;
+        const margin_usdt = 1.0;
+
+        const stopLoss = type === 'BUY'
+          ? currentPrice * (1 - tradingConfig.stopLossPercent / 100)
+          : currentPrice * (1 + tradingConfig.stopLossPercent / 100);
+        const takeProfit = type === 'BUY'
+          ? currentPrice * (1 + tradingConfig.takeProfitPercent / 100)
+          : currentPrice * (1 - tradingConfig.takeProfitPercent / 100);
+        const liquidationPrice = type === 'BUY'
+          ? currentPrice * (1 - 0.9 / leverage)
+          : currentPrice * (1 + 0.9 / leverage);
+        const trailingStop = type === 'BUY'
+          ? stopLoss + (Math.abs(currentPrice - stopLoss) * 0.5)
+          : stopLoss - (Math.abs(currentPrice - stopLoss) * 0.5);
+
         signals.push({
           id: randomUUID(),
           symbol,
           type,
           score: Math.abs(shortMA - longMA),
-          price: closes[closes.length - 1],
+          price: currentPrice,
+          stopLoss: parseFloat(stopLoss.toFixed(6)),
+          takeProfit: parseFloat(takeProfit.toFixed(6)),
+          liquidationPrice: parseFloat(liquidationPrice.toFixed(6)),
+          trailingStop: parseFloat(trailingStop.toFixed(6)),
+          currentMarketPrice: currentPrice,
           confidence: Math.abs(shortMA - longMA) / longMA > 0.01 ? 'HIGH' : 'MEDIUM',
           status: 'PENDING',
           timestamp: new Date().toISOString(),
+          interval,
+          signal_type: type.toLowerCase(),
+          indicators,
+          entry: parseFloat(currentPrice.toFixed(6)),
+          sl: parseFloat(stopLoss.toFixed(6)),
+          tp: parseFloat(takeProfit.toFixed(6)),
+          trail: parseFloat(trailingStop.toFixed(6)),
+          liquidation: parseFloat(liquidationPrice.toFixed(6)),
+          margin_usdt,
+          bb_slope: indicators.bollinger.upper.length ? 'Contracting' : 'Neutral',
+          market: 'Normal',
+          leverage,
+          risk_reward: riskReward,
+          atr_multiplier: atrMultiplier,
+          created_at: new Date().toISOString(),
+          signals: ['MA_CROSSOVER'],
         });
       }
     } catch (err) {
@@ -212,6 +261,8 @@ export async function executeTrade(trade: {
   size: number;
   type: 'market' | 'limit';
   price?: number;
+  stopLoss?: number;
+  takeProfit?: number;
 }) {
   try {
     const params: any = {
@@ -223,6 +274,8 @@ export async function executeTrade(trade: {
     };
 
     if (trade.type === 'limit' && trade.price) params.price = trade.price.toString();
+    if (trade.stopLoss) params.stopLoss = trade.stopLoss.toString();
+    if (trade.takeProfit) params.takeProfit = trade.takeProfit.toString();
 
     const response = await bybitRestClient.submitOrder(params);
     await getPositions(); // Refresh positions

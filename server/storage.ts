@@ -1,19 +1,20 @@
-// storage.ts
 import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { UserType, InsertUser } from '@shared/schema';
 import { fileURLToPath } from 'url';
+import { IndicatorData } from './indicators';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Interfaces matching App.tsx
+// Interfaces matching App.tsx and SettingsPanel.tsx
 export interface Position {
   id: string;
   symbol: string;
   side: 'BUY' | 'SELL';
   size: number;
+  leverage: number;
   entryPrice: number;
   currentPrice?: number;
   exitPrice?: number;
@@ -22,6 +23,10 @@ export interface Position {
   status: 'OPEN' | 'CLOSED';
   openTime: string;
   closeTime?: string;
+  stopLoss?: number;
+  takeProfit?: number;
+  liquidationPrice?: number;
+  trailingStop?: number;
 }
 
 export interface Signal {
@@ -30,10 +35,31 @@ export interface Signal {
   type: 'BUY' | 'SELL';
   score: number;
   price: number;
+  stopLoss: number;
+  takeProfit: number;
+  liquidationPrice: number;
+  trailingStop?: number;
+  currentMarketPrice: number;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   status: 'PENDING' | 'EXECUTED' | 'EXPIRED';
   timestamp: string;
   executedPrice?: number;
+  interval: string;
+  signal_type: string;
+  indicators: IndicatorData;
+  entry: number;
+  sl: number;
+  tp: number;
+  trail: number;
+  liquidation: number;
+  margin_usdt: number;
+  bb_slope: string;
+  market: string;
+  leverage: number;
+  risk_reward: number;
+  atr_multiplier: number;
+  created_at: string;
+  signals: string[];
 }
 
 export interface MarketData {
@@ -93,6 +119,7 @@ export interface IStorage {
   getSignals(): Promise<Signal[]>;
   setSignals(signals: Signal[]): Promise<void>;
   addSignal(signal: Signal): Promise<void>;
+  generateSignals(): Promise<Signal[]>;
   getMarketData(): Promise<MarketData[]>;
   setMarketData(marketData: MarketData[]): Promise<void>;
   getBalance(): Promise<Balance>;
@@ -152,7 +179,7 @@ export class MemStorage implements IStorage {
     this.positions = new Map();
     this.signals = new Map();
     this.marketData = new Map();
-    this.balance = { capital: 10000, available: 10000, used: 0 }; // Initialize with non-zero defaults
+    this.balance = { capital: 10000, available: 10000, used: 0 };
     this.apiConfig = { bybitApiKey: '', bybitApiSecret: '', bybitTestnet: true };
     this.notificationConfig = {
       discordEnabled: false,
@@ -176,7 +203,6 @@ export class MemStorage implements IStorage {
     this.initialize().catch((err) => console.error('[Storage] Initialization error:', err));
   }
 
-  // Initialize data from file with retry mechanism
   private async initialize(): Promise<void> {
     try {
       await this.loadFromFile();
@@ -187,7 +213,6 @@ export class MemStorage implements IStorage {
     }
   }
 
-  // File-based persistence with locking
   private async saveToFile(): Promise<void> {
     await this.fileLock.acquire();
     try {
@@ -229,13 +254,12 @@ export class MemStorage implements IStorage {
       console.log('[Storage] Loaded data from file successfully');
     } catch (error) {
       console.warn('[Storage] No data file found or parse error, using in-memory defaults');
-      await this.saveToFile(); // Create file with defaults if it doesn't exist
+      await this.saveToFile();
     } finally {
       this.fileLock.release();
     }
   }
 
-  // User methods
   async getUser(id: string): Promise<UserType | undefined> {
     return this.users.get(id);
   }
@@ -252,7 +276,6 @@ export class MemStorage implements IStorage {
     return user;
   }
 
-  // Trading data methods
   async getPositions(): Promise<Position[]> {
     return Array.from(this.positions.values());
   }
@@ -279,6 +302,78 @@ export class MemStorage implements IStorage {
   async addSignal(signal: Signal): Promise<void> {
     this.signals.set(signal.id, signal);
     await this.saveToFile();
+  }
+
+  async generateSignals(): Promise<Signal[]> {
+    const marketData = await this.getMarketData();
+    const tradingConfig = await this.getTradingConfig();
+    const signals: Signal[] = marketData.map(data => {
+      const score = Math.random() * 100;
+      const type = score > 50 ? 'BUY' : 'SELL';
+      const signal_type = type === 'BUY' ? 'buy' : 'sell';
+      const confidence = score > 80 ? 'HIGH' : score > 60 ? 'MEDIUM' : 'LOW';
+      const entryPrice = data.price;
+      const leverage = tradingConfig.leverage || 10;
+      const atrMultiplier = 2;
+      const riskReward = 2;
+      const margin_usdt = 1.0;
+      const stopLoss = type === 'BUY'
+        ? entryPrice * (1 - tradingConfig.stopLossPercent / 100)
+        : entryPrice * (1 + tradingConfig.stopLossPercent / 100);
+      const takeProfit = type === 'BUY'
+        ? entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+        : entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+      const liquidationPrice = type === 'BUY'
+        ? entryPrice * (1 - 0.9 / leverage)
+        : entryPrice * (1 + 0.9 / leverage);
+      const trailingStopDistance = Math.abs(entryPrice - stopLoss) * 0.5;
+      const trailingStop = type === 'BUY'
+        ? stopLoss + trailingStopDistance
+        : stopLoss - trailingStopDistance;
+      // Placeholder indicators (should be computed in a real implementation)
+      const indicators: IndicatorData = {
+        sma20: [],
+        sma50: [],
+        ema20: [],
+        rsi: [],
+        macd: { macd: [], signal: [], histogram: [] },
+        bollinger: { upper: [], middle: [], lower: [] },
+        atr: []
+      };
+      return {
+        id: randomUUID(),
+        symbol: data.symbol,
+        type,
+        signal_type,
+        score,
+        price: entryPrice,
+        stopLoss,
+        takeProfit,
+        liquidationPrice,
+        trailingStop,
+        currentMarketPrice: data.price,
+        confidence,
+        status: 'PENDING',
+        timestamp: new Date().toISOString(),
+        interval: '60', // Default interval
+        indicators,
+        entry: parseFloat(entryPrice.toFixed(6)),
+        sl: parseFloat(stopLoss.toFixed(6)),
+        tp: parseFloat(takeProfit.toFixed(6)),
+        trail: parseFloat((trailingStop || 0).toFixed(6)),
+        liquidation: parseFloat(liquidationPrice.toFixed(6)),
+        margin_usdt,
+        bb_slope: 'Contracting', // Placeholder
+        market: 'Normal', // Placeholder
+        leverage,
+        risk_reward: riskReward,
+        atr_multiplier: atrMultiplier,
+        created_at: new Date().toISOString(),
+        signals: [] // Placeholder
+      };
+    });
+    await this.setSignals(signals);
+    return signals;
   }
 
   async getMarketData(): Promise<MarketData[]> {
@@ -349,5 +444,4 @@ export class MemStorage implements IStorage {
   }
 }
 
-// Export a single instance
 export const storage = new MemStorage();

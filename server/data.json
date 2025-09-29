@@ -1,0 +1,38 @@
+{
+  "users": [],
+  "positions": [],
+  "signals": [],
+  "marketData": [],
+  "balance": {
+    "capital": 10000,
+    "available": 10000,
+    "used": 0
+  },
+  "apiConfig": {
+    "bybitApiKey": "",
+    "bybitApiSecret": "",
+    "bybitTestnet": true
+  },
+  "notificationConfig": {
+    "discordEnabled": false,
+    "discordWebhook": "",
+    "telegramEnabled": false,
+    "telegramBotToken": "",
+    "telegramChatId": "",
+    "whatsappEnabled": false,
+    "whatsappNumber": ""
+  },
+  "tradingConfig": {
+    "maxPositions": 5,
+    "riskPerTrade": 2,
+    "leverage": 10,
+    "stopLossPercent": 5,
+    "takeProfitPercent": 15,
+    "scanInterval": 300
+  },
+  "appStatus": {
+    "tradingMode": "virtual",
+    "isAutomatedTradingEnabled": false
+  },
+  "connectionStatus": "disconnected"
+}

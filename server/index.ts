@@ -10,6 +10,15 @@ import { setupVite, serveStatic, log } from './vite';
 import { storage } from './storage';
 import { startAutomatedTrading } from './automatedTrader';
 
+// ✅ Handle uncaught exceptions and rejections to prevent process exit
+process.on('uncaughtException', (error) => {
+  log(`[Uncaught Exception] ${error.message}\n${error.stack}`);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  log(`[Unhandled Rejection] at: ${promise} reason: ${reason}`);
+});
+
 const app = express();
 const PORT = parseInt(process.env.PORT || '8000', 10);
 
@@ -64,10 +73,17 @@ app.get('/', (_req: Request, res: Response) => {
 
 (async () => {
   try {
-    await storage.init();
+    // ✅ Initialize storage with error handling
+    try {
+      await storage.init();
+    } catch (error: any) {
+      log(`[Storage] Failed to initialize: ${error.message}, using in-memory defaults`);
+      // Optionally, initialize in-memory storage explicitly if needed
+    }
+
     await registerRoutes(app);
 
-    // Global error handler
+    // Global error handler for Express middleware
     app.use(
       (err: any, _req: Request, res: Response, _next: NextFunction) => {
         const status = err.status || err.statusCode || 500;
@@ -82,7 +98,6 @@ app.get('/', (_req: Request, res: Response) => {
     );
 
     if (process.env.NODE_ENV === 'development') {
-      // ✅ server is already declared above — no errors
       await setupVite(app, server);
     } else {
       serveStatic(app);
@@ -93,6 +108,7 @@ app.get('/', (_req: Request, res: Response) => {
       log(`Server running on http://localhost:${PORT}`);
     });
 
+    // ✅ Start automated trading with error handling
     const status = await storage.getAppStatus();
     if (status.isAutomatedTradingEnabled) {
       log(
@@ -100,10 +116,15 @@ app.get('/', (_req: Request, res: Response) => {
           status.tradingMode || 'virtual'
         } mode`
       );
-      await startAutomatedTrading(status.tradingMode || 'virtual');
+      try {
+        await startAutomatedTrading(status.tradingMode || 'virtual');
+      } catch (error: any) {
+        log(`[AutomatedTrading] Failed to start: ${error.message}`);
+        // Continue running the server even if automated trading fails
+      }
     }
   } catch (error: any) {
     log(`[Server] Failed to start server: ${error.message ?? error}`);
-    process.exit(1);
+    process.exit(1); // Exit only if server setup fails
   }
 })();

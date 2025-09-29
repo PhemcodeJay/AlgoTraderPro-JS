@@ -1,4 +1,4 @@
-import { RestClientV5, WebsocketClient } from 'bybit-api';
+import { RestClientV5, WebsocketClient, KlineIntervalV3 } from 'bybit-api';
 import dotenv from 'dotenv';
 import { storage, Position, MarketData, Balance, Signal } from './storage';
 import { randomUUID } from 'crypto';
@@ -6,14 +6,19 @@ import { IndicatorData, calculateIndicators } from './indicators';
 
 dotenv.config();
 
-const API_KEY = process.env.BYBIT_API_KEY || '';
-const API_SECRET = process.env.BYBIT_API_SECRET || '';
-const IS_MAINNET = process.env.BYBIT_MAINNET === 'true';
-const IS_TESTNET = process.env.BYBIT_TESTNET === 'true';
-const USE_MAINNET = IS_TESTNET ? false : IS_MAINNET;
+// --- Validate environment variables ---
+const API_KEY = process.env.BYBIT_API_KEY;
+const API_SECRET = process.env.BYBIT_API_SECRET;
+const USE_MAINNET = process.env.BYBIT_MAINNET === 'true';
+
+if (!API_KEY || !API_SECRET) {
+  console.error('[Bybit] Error: BYBIT_API_KEY and BYBIT_API_SECRET must be set in .env');
+  process.exit(1);
+}
 
 console.log(`[Bybit] Client starting on: ${USE_MAINNET ? 'MAINNET' : 'TESTNET'}`);
 
+// --- Base URLs ---
 const BASE_URL = USE_MAINNET
   ? 'https://api.bybit.com'
   : 'https://api-testnet.bybit.com';
@@ -42,19 +47,27 @@ async function safeSubscribe(topics: string[], retries = 3, delay = 1000): Promi
       await bybitWsClient.subscribe(topics);
       console.log('[Bybit WS] Subscribed to topics:', topics);
       return;
-    } catch (err) {
-      console.error(`[Bybit WS] Subscription failed (attempt ${i + 1}/${retries}):`, err);
+    } catch (err: any) {
+      console.error(`[Bybit WS] Subscription failed (attempt ${i + 1}/${retries}):`, err.message);
       if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
-  console.error('[Bybit WS] Max subscription retries reached');
+  throw new Error('[Bybit WS] Max subscription retries reached');
 }
 
-// --- Initialize WebSocket ---
+// --- Initialize WebSocket with retry limit ---
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+
 export function initWebSocket() {
   bybitWsClient.on('open', async () => {
     console.log('[Bybit WS] Connected');
-    await safeSubscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT']);
+    reconnectAttempts = 0;
+    try {
+      await safeSubscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT']);
+    } catch (err: any) {
+      console.error('[Bybit WS] Failed to subscribe:', err.message);
+    }
   });
 
   bybitWsClient.on('update', async (msg: any) => {
@@ -63,30 +76,40 @@ export function initWebSocket() {
         const data = msg.data;
         const update: MarketData = {
           symbol: data.symbol,
-          price: parseFloat(data.lastPrice),
+          price: parseFloat(data.lastPrice) || 0,
           change24h: parseFloat(data.price24hPcnt) || 0,
           changePercent24h: parseFloat(data.price24hPcnt) * 100 || 0,
           volume24h: parseFloat(data.turnover24h) || 0,
           high24h: parseFloat(data.highPrice24h) || 0,
           low24h: parseFloat(data.lowPrice24h) || 0,
         };
-        const current = await storage.getMarketData();
+        const current = await storage.getMarketData().catch((err) => {
+          console.error('[Storage] getMarketData failed:', err);
+          return [] as MarketData[];
+        });
         const idx = current.findIndex((d) => d.symbol === update.symbol);
         if (idx >= 0) current[idx] = update;
         else current.push(update);
-        await storage.setMarketData(current);
-      } catch (err) {
-        console.error('[Bybit WS] Error updating market data:', err);
+        await storage.setMarketData(current).catch((err) => {
+          console.error('[Storage] setMarketData failed:', err);
+        });
+      } catch (err: any) {
+        console.error('[Bybit WS] Error updating market data:', err.message);
       }
     }
   });
 
   bybitWsClient.on('error', (err: any) => {
-    console.error('[Bybit WS] Error:', err);
+    console.error('[Bybit WS] Error:', err.message);
   });
 
   bybitWsClient.on('close', () => {
-    console.warn('[Bybit WS] Connection closed, reconnecting...');
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.error('[Bybit WS] Max reconnect attempts reached, stopping retries');
+      return;
+    }
+    reconnectAttempts++;
+    console.warn(`[Bybit WS] Connection closed, reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
     setTimeout(initWebSocket, 3000);
   });
 }
@@ -106,10 +129,12 @@ export async function getMarketData(symbols: string[] = ['BTCUSDT', 'ETHUSDT'], 
         high24h: parseFloat(item.highPrice24h) || 0,
         low24h: parseFloat(item.lowPrice24h) || 0,
       }));
-      await storage.setMarketData(marketData);
+      await storage.setMarketData(marketData).catch((err) => {
+        console.error('[Storage] setMarketData failed:', err);
+      });
       return marketData;
-    } catch (err) {
-      console.error(`[Bybit] getMarketData failed (attempt ${i + 1}/${retries}):`, err);
+    } catch (err: any) {
+      console.error(`[Bybit] getMarketData failed (attempt ${i + 1}/${retries}):`, err.message);
       if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
@@ -144,10 +169,12 @@ export async function getPositions(): Promise<Position[]> {
       liquidationPrice: parseFloat(pos.liqPrice) || undefined,
       trailingStop: parseFloat(pos.trailingStop) || undefined,
     }));
-    await storage.setPositions(positions);
+    await storage.setPositions(positions).catch((err) => {
+      console.error('[Storage] setPositions failed:', err);
+    });
     return positions;
-  } catch (err) {
-    console.error('[Bybit] getPositions failed:', err);
+  } catch (err: any) {
+    console.error('[Bybit] getPositions failed:', err.message);
     return [];
   }
 }
@@ -162,19 +189,24 @@ export async function getBalance(): Promise<Balance> {
       available: parseFloat(usdt?.availableToWithdraw || '0'),
       used: parseFloat(usdt?.locked || '0'),
     };
-    await storage.setBalance(balance);
+    await storage.setBalance(balance).catch((err) => {
+      console.error('[Storage] setBalance failed:', err);
+    });
     return balance;
-  } catch (err) {
-    console.error('[Bybit] getBalance failed:', err);
+  } catch (err: any) {
+    console.error('[Bybit] getBalance failed:', err.message);
     return { capital: 0, available: 0, used: 0 };
   }
 }
 
 // --- Scan trading signals ---
-export async function scanSignals(interval: string = '15', limit: number = 50): Promise<Signal[]> {
+export async function scanSignals(interval: KlineIntervalV3 = '15', limit: number = 50): Promise<Signal[]> {
   const symbols = ['BTCUSDT', 'ETHUSDT'];
   const signals: Signal[] = [];
-  const tradingConfig = await storage.getTradingConfig();
+  const tradingConfig = await storage.getTradingConfig().catch((err) => {
+    console.error('[Storage] getTradingConfig failed:', err);
+    return { leverage: 10, stopLossPercent: 2, takeProfitPercent: 4 };
+  });
 
   for (const symbol of symbols) {
     try {
@@ -193,7 +225,7 @@ export async function scanSignals(interval: string = '15', limit: number = 50): 
 
       if (type) {
         const currentPrice = closes[closes.length - 1];
-        const indicators = calculateIndicators({ open: [], high: highs, low: lows, close: closes, volume: [] });
+        const indicators = calculateIndicators(closes, highs, lows, []); // Fixed: Pass arrays separately
         const atr = indicators.atr[indicators.atr.length - 1] || 0;
         const leverage = tradingConfig.leverage || 10;
         const riskReward = 2;
@@ -201,11 +233,11 @@ export async function scanSignals(interval: string = '15', limit: number = 50): 
         const margin_usdt = 1.0;
 
         const stopLoss = type === 'BUY'
-          ? currentPrice * (1 - tradingConfig.stopLossPercent / 100)
-          : currentPrice * (1 + tradingConfig.stopLossPercent / 100);
+          ? currentPrice * (1 - (tradingConfig.stopLossPercent || 2) / 100)
+          : currentPrice * (1 + (tradingConfig.stopLossPercent || 2) / 100);
         const takeProfit = type === 'BUY'
-          ? currentPrice * (1 + tradingConfig.takeProfitPercent / 100)
-          : currentPrice * (1 - tradingConfig.takeProfitPercent / 100);
+          ? currentPrice * (1 + (tradingConfig.takeProfitPercent || 4) / 100)
+          : currentPrice * (1 - (tradingConfig.takeProfitPercent || 4) / 100);
         const liquidationPrice = type === 'BUY'
           ? currentPrice * (1 - 0.9 / leverage)
           : currentPrice * (1 + 0.9 / leverage);
@@ -245,12 +277,14 @@ export async function scanSignals(interval: string = '15', limit: number = 50): 
           signals: ['MA_CROSSOVER'],
         });
       }
-    } catch (err) {
-      console.error(`[Bybit] scanSignals failed for ${symbol}:`, err);
+    } catch (err: any) {
+      console.error(`[Bybit] scanSignals failed for ${symbol}:`, err.message);
     }
   }
 
-  await storage.setSignals(signals);
+  await storage.setSignals(signals).catch((err) => {
+    console.error('[Storage] setSignals failed:', err);
+  });
   return signals;
 }
 
@@ -278,10 +312,12 @@ export async function executeTrade(trade: {
     if (trade.takeProfit) params.takeProfit = trade.takeProfit.toString();
 
     const response = await bybitRestClient.submitOrder(params);
-    await getPositions(); // Refresh positions
+    await getPositions().catch((err) => {
+      console.error('[Storage] getPositions after trade failed:', err);
+    });
     return response.result;
-  } catch (err) {
-    console.error('[Bybit] executeTrade failed:', err);
+  } catch (err: any) {
+    console.error('[Bybit] executeTrade failed:', err.message);
     throw err;
   }
 }
@@ -291,11 +327,15 @@ export async function testConnection(): Promise<boolean> {
   try {
     const serverTime = await bybitRestClient.getServerTime();
     console.log('[Bybit REST] Server time:', serverTime);
-    await storage.setConnectionStatus('connected');
+    await storage.setConnectionStatus('connected').catch((err) => {
+      console.error('[Storage] setConnectionStatus failed:', err);
+    });
     return true;
-  } catch (error) {
-    await storage.setConnectionStatus('disconnected');
-    console.error('[Bybit REST] Connection failed:', error);
+  } catch (err: any) {
+    await storage.setConnectionStatus('disconnected').catch((err) => {
+      console.error('[Storage] setConnectionStatus failed:', err);
+    });
+    console.error('[Bybit REST] Connection failed:', err.message);
     return false;
   }
 }

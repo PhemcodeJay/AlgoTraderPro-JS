@@ -4,6 +4,7 @@ import path from 'path';
 import { UserType, InsertUser } from '@shared/schema';
 import { fileURLToPath } from 'url';
 import { IndicatorData } from './indicators';
+import { scanSignals } from './bybitClient'; // Import scanSignals for real signal generation
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,13 +79,13 @@ export interface Balance {
   used: number;
 }
 
-interface ApiConfig {
+export interface ApiConfig {
   bybitApiKey: string;
   bybitApiSecret: string;
   bybitTestnet: boolean;
 }
 
-interface NotificationConfig {
+export interface NotificationConfig {
   discordEnabled: boolean;
   discordWebhook: string;
   telegramEnabled: boolean;
@@ -94,7 +95,7 @@ interface NotificationConfig {
   whatsappNumber: string;
 }
 
-interface TradingConfig {
+export interface TradingConfig {
   maxPositions: number;
   riskPerTrade: number;
   leverage: number;
@@ -103,7 +104,7 @@ interface TradingConfig {
   scanInterval: number;
 }
 
-interface AppStatus {
+export interface AppStatus {
   tradingMode: 'virtual' | 'real';
   isAutomatedTradingEnabled: boolean;
 }
@@ -207,40 +208,57 @@ export class MemStorage implements IStorage {
     try {
       await this.initialize();
       console.log('[Storage] Initialized successfully');
-    } catch (error) {
-      console.error('[Storage] Failed to initialize:', error);
-      throw error;
+    } catch (error: any) {
+      console.error('[Storage] Failed to initialize:', error.message);
+      // Don't throw; use in-memory defaults to keep server running
     }
   }
 
   private async initialize(): Promise<void> {
-    try {
-      await this.loadFromFile();
-    } catch (error) {
-      console.error('[Storage] Initial load failed, retrying in 1s:', error);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await this.loadFromFile();
+    const maxRetries = 3;
+    let lastError: any = null;
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        await this.loadFromFile();
+        return;
+      } catch (error: any) {
+        lastError = error;
+        console.error(`[Storage] Load attempt ${i + 1}/${maxRetries} failed:`, error.message);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
     }
+    console.warn('[Storage] All load attempts failed, using in-memory defaults:', lastError.message);
+    await this.saveToFile(); // Initialize empty data.json
   }
 
   private async saveToFile(): Promise<void> {
+    const maxRetries = 3;
+    let lastError: any = null;
     await this.fileLock.acquire();
     try {
-      const data = {
-        users: Array.from(this.users.entries()),
-        positions: Array.from(this.positions.entries()),
-        signals: Array.from(this.signals.entries()),
-        marketData: Array.from(this.marketData.entries()),
-        balance: this.balance,
-        apiConfig: this.apiConfig,
-        notificationConfig: this.notificationConfig,
-        tradingConfig: this.tradingConfig,
-        appStatus: this.appStatus,
-        connectionStatus: this.connectionStatus,
-      };
-      await fs.writeFile(this.DATA_FILE, JSON.stringify(data, null, 2), { flag: 'w' });
-    } catch (error) {
-      console.error('[Storage] Failed to save to file:', error);
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          const data = {
+            users: Array.from(this.users.entries()),
+            positions: Array.from(this.positions.entries()),
+            signals: Array.from(this.signals.entries()),
+            marketData: Array.from(this.marketData.entries()),
+            balance: this.balance,
+            apiConfig: this.apiConfig,
+            notificationConfig: this.notificationConfig,
+            tradingConfig: this.tradingConfig,
+            appStatus: this.appStatus,
+            connectionStatus: this.connectionStatus,
+          };
+          await fs.writeFile(this.DATA_FILE, JSON.stringify(data, null, 2), { flag: 'w' });
+          return;
+        } catch (error: any) {
+          lastError = error;
+          console.error(`[Storage] Save attempt ${i + 1}/${maxRetries} failed:`, error.message);
+          if (i < maxRetries - 1) await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+      console.error('[Storage] All save attempts failed:', lastError.message);
     } finally {
       this.fileLock.release();
     }
@@ -262,9 +280,9 @@ export class MemStorage implements IStorage {
       this.appStatus = parsed.appStatus || this.appStatus;
       this.connectionStatus = parsed.connectionStatus || this.connectionStatus;
       console.log('[Storage] Loaded data from file successfully');
-    } catch (error) {
+    } catch (error: any) {
       console.warn('[Storage] No data file found or parse error, using in-memory defaults');
-      await this.saveToFile();
+      throw error; // Propagate to initialize for retry
     } finally {
       this.fileLock.release();
     }
@@ -315,75 +333,15 @@ export class MemStorage implements IStorage {
   }
 
   async generateSignals(): Promise<Signal[]> {
-    const marketData = await this.getMarketData();
-    const tradingConfig = await this.getTradingConfig();
-    const signals: Signal[] = marketData.map(data => {
-      const score = Math.random() * 100;
-      const type = score > 50 ? 'BUY' : 'SELL';
-      const signal_type = type === 'BUY' ? 'buy' : 'sell';
-      const confidence = score > 80 ? 'HIGH' : score > 60 ? 'MEDIUM' : 'LOW';
-      const entryPrice = data.price;
-      const leverage = tradingConfig.leverage || 10;
-      const atrMultiplier = 2;
-      const riskReward = 2;
-      const margin_usdt = 1.0;
-      const stopLoss = type === 'BUY'
-        ? entryPrice * (1 - tradingConfig.stopLossPercent / 100)
-        : entryPrice * (1 + tradingConfig.stopLossPercent / 100);
-      const takeProfit = type === 'BUY'
-        ? entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
-        : entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
-      const liquidationPrice = type === 'BUY'
-        ? entryPrice * (1 - 0.9 / leverage)
-        : entryPrice * (1 + 0.9 / leverage);
-      const trailingStopDistance = Math.abs(entryPrice - stopLoss) * 0.5;
-      const trailingStop = type === 'BUY'
-        ? stopLoss + trailingStopDistance
-        : stopLoss - trailingStopDistance;
-      // Placeholder indicators (should be computed in a real implementation)
-      const indicators: IndicatorData = {
-        sma20: [],
-        sma50: [],
-        ema20: [],
-        rsi: [],
-        macd: { macd: [], signal: [], histogram: [] },
-        bollinger: { upper: [], middle: [], lower: [] },
-        atr: []
-      };
-      return {
-        id: randomUUID(),
-        symbol: data.symbol,
-        type,
-        signal_type,
-        score,
-        price: entryPrice,
-        stopLoss,
-        takeProfit,
-        liquidationPrice,
-        trailingStop,
-        currentMarketPrice: data.price,
-        confidence,
-        status: 'PENDING',
-        timestamp: new Date().toISOString(),
-        interval: '60', // Default interval
-        indicators,
-        entry: parseFloat(entryPrice.toFixed(6)),
-        sl: parseFloat(stopLoss.toFixed(6)),
-        tp: parseFloat(takeProfit.toFixed(6)),
-        trail: parseFloat((trailingStop || 0).toFixed(6)),
-        liquidation: parseFloat(liquidationPrice.toFixed(6)),
-        margin_usdt,
-        bb_slope: 'Contracting', // Placeholder
-        market: 'Normal', // Placeholder
-        leverage,
-        risk_reward: riskReward,
-        atr_multiplier: atrMultiplier,
-        created_at: new Date().toISOString(),
-        signals: [] // Placeholder
-      };
-    });
-    await this.setSignals(signals);
-    return signals;
+    try {
+      // Use scanSignals from bybitClient.ts for real signal generation
+      const signals = await scanSignals('60'); // Use 60-minute interval as default
+      await this.setSignals(signals);
+      return signals;
+    } catch (error: any) {
+      console.error('[Storage] generateSignals failed:', error.message);
+      return [];
+    }
   }
 
   async getMarketData(): Promise<MarketData[]> {

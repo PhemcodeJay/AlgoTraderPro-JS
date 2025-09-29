@@ -110,6 +110,7 @@ interface AppStatus {
 
 // Storage interface
 export interface IStorage {
+  init(): Promise<void>;
   getUser(id: string): Promise<UserType | undefined>;
   getUserByUsername(username: string): Promise<UserType | undefined>;
   createUser(user: InsertUser): Promise<UserType>;
@@ -200,7 +201,16 @@ export class MemStorage implements IStorage {
     };
     this.appStatus = { tradingMode: 'virtual', isAutomatedTradingEnabled: false };
     this.connectionStatus = 'disconnected';
-    this.initialize().catch((err) => console.error('[Storage] Initialization error:', err));
+  }
+
+  async init(): Promise<void> {
+    try {
+      await this.initialize();
+      console.log('[Storage] Initialized successfully');
+    } catch (error) {
+      console.error('[Storage] Failed to initialize:', error);
+      throw error;
+    }
   }
 
   private async initialize(): Promise<void> {

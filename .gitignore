@@ -4,3 +4,4 @@ server/node_modules/
 server/.env
 clean.js
 server/data.json
+test_api_endpoints.sh

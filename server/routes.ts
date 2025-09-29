@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import { createServer, type Server } from 'http';
 import { WebSocketServer } from 'ws';
+import { KlineIntervalV3 } from 'bybit-api';
 import { storage, Signal, Position, MarketData, Balance } from './storage';
 import { bybitWsClient, getMarketData, getPositions, getBalance, scanSignals, executeTrade, testConnection } from './bybitClient';
 import { startAutomatedTrading, stopAutomatedTrading } from './automatedTrader';
@@ -51,7 +52,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!interval || typeof interval !== 'string' || !limit || typeof limit !== 'number') {
         return res.status(400).json({ error: 'Invalid interval or limit' });
       }
-      const signals = await scanSignals(interval, limit);
+      const signals = await scanSignals(interval as KlineIntervalV3, limit);
       await sendAllNotifications(signals); // Trigger notifications
       res.json(signals);
     } catch (error: any) {

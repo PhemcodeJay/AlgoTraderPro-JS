@@ -20,7 +20,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '8000', 10);
+const PORT = parseInt(process.env.PORT || '5000', 10);
 
 // ✅ Create the server BEFORE anything else that needs it
 const server = http.createServer(app);
@@ -30,10 +30,17 @@ app.use(
   cors({
     origin: [
       'http://localhost:5173',
+      'http://localhost:8000',
+      'http://localhost:3000',
+      'http://0.0.0.0:5000',
+      'http://0.0.0.0:8000',
       process.env.FRONTEND_URL || 'http://localhost:3000',
+      /\.replit\.app$/,
+      /\.repl\.co$/
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
   })
 );
 
@@ -105,7 +112,7 @@ app.get('/', (_req: Request, res: Response) => {
 
     // ✅ Start listening
     server.listen(PORT, '0.0.0.0', () => {
-      log(`Server running on http://localhost:${PORT}`);
+      log(`Server running on http://0.0.0.0:${PORT}`);
     });
 
     // ✅ Start automated trading with error handling

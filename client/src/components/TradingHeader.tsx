@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { AlertTriangle, Settings, Bell, Power } from "lucide-react";
-import logoUrl from "@assets/generated_images/AlgoTrader_Pro_logo_fc41ae5b.png";
 
 interface TradingHeaderProps {
   tradingMode: "virtual" | "real";
@@ -38,7 +37,9 @@ export default function TradingHeader({
       <div className="flex items-center justify-between">
         {/* Logo and Brand */}
         <div className="flex items-center gap-3">
-          <img src={logoUrl} alt="AlgoTrader Pro" className="w-8 h-8" />
+          <div className="h-8 w-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
+            AT
+          </div>
           <div>
             <h1 className="text-lg font-semibold text-foreground">AlgoTrader Pro</h1>
             <div className="flex items-center gap-2">

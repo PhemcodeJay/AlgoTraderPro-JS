@@ -76,6 +76,8 @@ export default function TradingDashboardExample() {
       signals={mockSignals}
       isAutomatedTradingEnabled={false}
       onToggleAutomatedTrading={() => console.log('Toggle automated trading')}
+      onScanSignals={() => console.log('Scan signals')}
+      isScanning={false}
     />
   );
 }

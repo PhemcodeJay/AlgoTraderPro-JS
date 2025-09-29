@@ -10,9 +10,10 @@ import AnalyticsPage from "./components/AnalyticsPage";
 import SettingsPanel from "./components/SettingsPanel";
 import MarketOverview from "./components/MarketOverview";
 import TradeExecutionPanel from "./components/TradeExecutionPanel";
-import { 
-  TrendingUp, 
-  TrendingDown, 
+import TradingDashboard from "./components/TradingDashboard"; // Import TradingDashboard
+import {
+  TrendingUp,
+  TrendingDown,
   Clock,
   CheckCircle,
   XCircle,
@@ -21,9 +22,8 @@ import {
   DollarSign,
   Send
 } from "lucide-react";
-import { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
-import { ThemeProvider } from "@/components/ThemeProvider";
 
 // Define interfaces matching backend storage.ts
 interface Position {
@@ -540,7 +540,7 @@ function App() {
     if (!date) return 'N/A';
     const dateObj = new Date(date);
     if (isNaN(dateObj.getTime())) return 'N/A';
-    return dateObj.toLocaleDateString() + " " + 
+    return dateObj.toLocaleDateString() + " " +
            dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
@@ -565,7 +565,7 @@ function App() {
   // Compute dashboard stats
   const stats: DashboardStats = {
     totalPnL: positions.reduce((sum, p) => sum + computePnL(p), 0),
-    winRate: positions.filter(p => p.status === 'CLOSED' && p.pnl > 0).length / 
+    winRate: positions.filter(p => p.status === 'CLOSED' && p.pnl > 0).length /
              Math.max(positions.filter(p => p.status === 'CLOSED').length, 1) * 100,
     totalTrades: positions.length,
     activePositions: positions.filter(p => p.status === 'OPEN').length,
@@ -581,6 +581,19 @@ function App() {
 
   const renderPage = () => {
     switch (currentPage) {
+      case 'dashboard':
+        return (
+          <TradingDashboard
+            stats={stats}
+            positions={positions.filter(p => p.status === 'OPEN')}
+            signals={signals.filter(s => s.status === 'PENDING')}
+            isAutomatedTradingEnabled={isAutomatedTradingEnabled}
+            onToggleAutomatedTrading={() => toggleAutomatedTrading.mutate(!isAutomatedTradingEnabled)}
+            onScanSignals={() => handleScanSignals()}
+            isScanning={isScanning}
+          />
+        );
+
       case 'positions':
         return (
           <div className="p-6 space-y-6">
@@ -780,7 +793,7 @@ function App() {
                     max="100"
                   />
                 </div>
-                <Button 
+                <Button
                   onClick={handleScanSignals}
                   disabled={isScanning}
                   className="flex items-center gap-2"
@@ -855,8 +868,8 @@ function App() {
                             ) : (
                               <TrendingDown className="w-4 h-4 text-trading-loss" />
                             )}
-                            <Badge 
-                              variant={signal.confidence === 'HIGH' ? 'default' : 
+                            <Badge
+                              variant={signal.confidence === 'HIGH' ? 'default' :
                                       signal.confidence === 'MEDIUM' ? 'secondary' : 'outline'}
                             >
                               {signal.confidence}
@@ -907,8 +920,8 @@ function App() {
                             ) : (
                               <TrendingDown className="w-4 h-4 text-trading-loss" />
                             )}
-                            <Badge 
-                              variant={signal.confidence === 'HIGH' ? 'default' : 
+                            <Badge
+                              variant={signal.confidence === 'HIGH' ? 'default' :
                                       signal.confidence === 'MEDIUM' ? 'secondary' : 'outline'}
                             >
                               {signal.confidence}
@@ -1012,9 +1025,11 @@ function App() {
           />
         );
 
-      default:
+      default: // This case should ideally not be reached if all pages are handled.
         return (
           <div className="p-6 space-y-6">
+            <h2 className="text-2xl font-bold">Dashboard</h2>
+            {/* Render dashboard content here */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <Card className="hover-elevate">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -1089,47 +1104,40 @@ function App() {
     }
   };
 
-  // Initialize React Query client
-  const queryClientInstance = new QueryClient();
-
   return (
-    <QueryClientProvider client={queryClientInstance}>
-      <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
-        <SidebarProvider>
-          <div className="flex h-screen bg-background">
-            <TradingSidebar
-              currentPage={currentPage}
-              onPageChange={setCurrentPage}
-              stats={{
-                activePositions: positions.filter(p => p.status === 'OPEN').length,
-                pendingSignals: signals.filter(s => s.status === 'PENDING').length,
-                dailyPnL,
-                isAutomatedTradingEnabled
-              }}
-            />
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <TradingHeader
-                tradingMode={tradingMode}
-                onTradingModeChange={(mode) => {
-                  if (mode === 'real') {
-                    if (!confirm('⚠️ Warning: You are switching to LIVE trading mode. Real money will be at risk!')) return;
-                  }
-                  changeTradingMode.mutate(mode);
-                }}
-                isConnected={connectionStatus === 'connected'}
-                balance={balance}
-                onEmergencyStop={() => emergencyStop.mutate()}
-                onSettingsClick={() => setCurrentPage('settings')}
-              />
-              <main className="flex-1 overflow-auto">
-                {renderPage()}
-              </main>
-            </div>
-          </div>
-          <Toaster />
-        </SidebarProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <SidebarProvider>
+      <div className="flex h-screen bg-background">
+        <TradingSidebar
+          currentPage={currentPage}
+          onPageChange={setCurrentPage}
+          stats={{
+            activePositions: positions.filter(p => p.status === 'OPEN').length,
+            pendingSignals: signals.filter(s => s.status === 'PENDING').length,
+            dailyPnL,
+            isAutomatedTradingEnabled
+          }}
+        />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TradingHeader
+            tradingMode={tradingMode}
+            onTradingModeChange={(mode) => {
+              if (mode === 'real') {
+                if (!confirm('⚠️ Warning: You are switching to LIVE trading mode. Real money will be at risk!')) return;
+              }
+              changeTradingMode.mutate(mode);
+            }}
+            isConnected={connectionStatus === 'connected'}
+            balance={balance}
+            onEmergencyStop={() => emergencyStop.mutate()}
+            onSettingsClick={() => setCurrentPage('settings')}
+          />
+          <main className="flex-1 overflow-auto">
+            {renderPage()}
+          </main>
+        </div>
+      </div>
+      <Toaster />
+    </SidebarProvider>
   );
 }
 

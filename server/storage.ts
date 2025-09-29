@@ -181,7 +181,7 @@ export class MemStorage implements IStorage {
     this.positions = new Map();
     this.signals = new Map();
     this.marketData = new Map();
-    this.balance = { capital: 10000, available: 10000, used: 0 };
+    this.balance = { capital: 0, available: 0, used: 0 };
     this.apiConfig = { bybitApiKey: '', bybitApiSecret: '', bybitTestnet: true };
     this.notificationConfig = {
       discordEnabled: false,

@@ -12,7 +12,35 @@ import {
   BarChart3,
   Zap
 } from "lucide-react";
-import { Position, Signal, DashboardStats } from '@shared/schema';
+// Define interfaces locally since import is not working
+interface Position {
+  id: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  size: number;
+  entryPrice: number;
+  currentPrice?: number;
+  pnl: number;
+  pnlPercent: number;
+  status: 'OPEN' | 'CLOSED';
+  leverage: number;
+}
+
+interface Signal {
+  id: string;
+  symbol: string;
+  signalType: 'BUY' | 'SELL';
+  entryPrice: number;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  score: number;
+}
+
+interface DashboardStats {
+  totalPnL: number;
+  winRate: number;
+  totalTrades: number;
+  activePositions: number;
+}
 
 interface TradingDashboardProps {
   stats: DashboardStats;
@@ -20,6 +48,8 @@ interface TradingDashboardProps {
   signals: Signal[];
   isAutomatedTradingEnabled: boolean;
   onToggleAutomatedTrading: () => void;
+  onScanSignals: () => void;
+  isScanning: boolean;
 }
 
 export default function TradingDashboard({
@@ -28,6 +58,8 @@ export default function TradingDashboard({
   signals,
   isAutomatedTradingEnabled,
   onToggleAutomatedTrading,
+  onScanSignals,
+  isScanning,
 }: TradingDashboardProps) {
   const [selectedTimeframe, setSelectedTimeframe] = useState("24h");
 
@@ -109,15 +141,26 @@ export default function TradingDashboard({
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2">
               <Zap className="w-5 h-5" />
-              Automated Trading
+              Trading Bot Control
             </CardTitle>
-            <Button
-              variant={isAutomatedTradingEnabled ? "destructive" : "default"}
-              onClick={onToggleAutomatedTrading}
-              data-testid="button-toggle-automated-trading"
-            >
-              {isAutomatedTradingEnabled ? "Stop" : "Start"} Bot
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={onScanSignals}
+                disabled={isScanning}
+                data-testid="button-scan-signals"
+              >
+                <Activity className={`w-4 h-4 mr-2 ${isScanning ? "animate-spin" : ""}`} />
+                {isScanning ? "Scanning..." : "Scan Signals"}
+              </Button>
+              <Button
+                variant={isAutomatedTradingEnabled ? "destructive" : "default"}
+                onClick={onToggleAutomatedTrading}
+                data-testid="button-toggle-automated-trading"
+              >
+                {isAutomatedTradingEnabled ? "Stop Bot" : "Start Bot"}
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -130,11 +173,22 @@ export default function TradingDashboard({
             </Badge>
             <span className="text-sm text-muted-foreground">
               {isAutomatedTradingEnabled 
-                ? "Bot is actively scanning for signals and executing trades"
-                : "Bot is stopped - manual trading only"
+                ? "Bot is actively scanning for signals and executing trades automatically"
+                : "Bot is stopped - use 'Scan Signals' for manual analysis or 'Start Bot' for automated trading"
               }
             </span>
           </div>
+          {isAutomatedTradingEnabled && (
+            <div className="mt-3 p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+              <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                <span className="font-medium">Automated Trading Active</span>
+              </div>
+              <p className="text-xs text-green-600/70 dark:text-green-400/70 mt-1">
+                The bot will automatically scan for signals and execute trades based on your configured settings.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -217,12 +271,12 @@ export default function TradingDashboard({
                       <div>
                         <div className="font-semibold">{signal.symbol}</div>
                         <div className="text-sm text-muted-foreground font-mono">
-                          ${signal.entryPrice.toFixed()}
+                          ${signal.entryPrice?.toFixed(2) || 'N/A'}
                         </div>
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="font-semibold font-mono">{signal.score.toFixed()}%</div>
+                      <div className="font-semibold font-mono">{signal.score?.toFixed(1) || 0}%</div>
                       <Button size="sm" variant="outline" data-testid={`button-execute-${signal.symbol}`}>
                         Execute
                       </Button>

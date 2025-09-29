@@ -11,7 +11,7 @@
     "build:client": "vite build",
     "build": "npm run build:client && npm run build:server",
     "start:server": "cross-env NODE_ENV=production tsx server/index.ts",
-    "start:client": "vite preview --port 8000",
+    "start:client": "vite preview --port 8000 --host 0.0.0.0",
     "start": "concurrently \"npm run start:server\" \"npm run start:client\"",
     "check": "tsc --noEmit",
     "db:push": "drizzle-kit push --config=server/drizzle.config.ts"
@@ -49,6 +49,7 @@
     "@radix-ui/react-tooltip": "^1.2.0",
     "@tailwindcss/vite": "^4.1.13",
     "@tanstack/react-query": "^5.60.5",
+    "@types/cors": "^2.8.19",
     "body-parser": "^1.20.3",
     "bybit-api": "^4.3.1",
     "class-variance-authority": "^0.7.1",

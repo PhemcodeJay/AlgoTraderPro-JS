@@ -9,11 +9,11 @@ dotenv.config();
 // --- Validate environment variables ---
 const API_KEY = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
-const USE_MAINNET = process.env.BYBIT_MAINNET === 'true';
+const USE_MAINNET = process.env.BYBIT_MAINNET === 'true' || process.env.BYBIT_TESTNET === 'false';
 
 if (!API_KEY || !API_SECRET) {
-  console.error('[Bybit] Error: BYBIT_API_KEY and BYBIT_API_SECRET must be set in .env');
-  process.exit(1);
+  console.warn('[Bybit] Warning: BYBIT_API_KEY and BYBIT_API_SECRET not set. Using demo mode.');
+  // Don't exit - allow the app to run in demo mode without real API access
 }
 
 console.log(`[Bybit] Client starting on: ${USE_MAINNET ? 'MAINNET' : 'TESTNET'}`);
@@ -36,7 +36,7 @@ export const bybitRestClient = new RestClientV5({
 
 // --- WebSocket Client ---
 export const bybitWsClient = new WebsocketClient({
-  market: 'linear',
+  market: 'v5',
   wsUrl: WS_URL,
 });
 
@@ -100,7 +100,7 @@ export function initWebSocket() {
   });
 
   bybitWsClient.on('error', (err: any) => {
-    console.error('[Bybit WS] Error:', err.message);
+    console.error('[Bybit WS] Error:', err?.message || err);
   });
 
   bybitWsClient.on('close', () => {
@@ -200,7 +200,7 @@ export async function getBalance(): Promise<Balance> {
 }
 
 // --- Scan trading signals ---
-export async function scanSignals(interval: KlineIntervalV3 = '15', limit: number = 50): Promise<Signal[]> {
+export async function scanSignals(interval: KlineIntervalV3 | string = '15', limit: number = 50): Promise<Signal[]> {
   const symbols = ['BTCUSDT', 'ETHUSDT'];
   const signals: Signal[] = [];
   const tradingConfig = await storage.getTradingConfig().catch((err) => {
@@ -210,7 +210,7 @@ export async function scanSignals(interval: KlineIntervalV3 = '15', limit: numbe
 
   for (const symbol of symbols) {
     try {
-      const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval, limit });
+      const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval: interval as KlineIntervalV3, limit });
       const closes = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
       const highs = kline.result.list.map((c: any) => parseFloat(c[2])).reverse();
       const lows = kline.result.list.map((c: any) => parseFloat(c[3])).reverse();

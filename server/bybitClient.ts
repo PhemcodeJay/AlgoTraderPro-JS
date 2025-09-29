@@ -70,15 +70,16 @@ async function safeSubscribe(topics: string[], retries = 3, delay = 1000): Promi
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
-// --- Initialize WebSocket with retry limit ---
+// --- Initialize WebSocket ---
 export function initWebSocket() {
-  const wsKey = 0; // numeric key for Linear Perpetual market
-  
+  const WS_KEY = 'linear-perpetual' as WsKey; // type-safe literal
+
   bybitWsClient.on('open', async () => {
     console.log('[Bybit WS] Connected');
     reconnectAttempts = 0;
     try {
-      await safeSubscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT'], wsKey);
+      // safeSubscribe only expects topics array, no need to pass WS_KEY
+      await safeSubscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT']);
     } catch (err: unknown) {
       console.error(
         '[Bybit WS] Failed to subscribe:',
@@ -117,9 +118,9 @@ export function initWebSocket() {
 
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       console.error('[Bybit WS] Max reconnect attempts reached. Stopping.');
-      bybitWsClient.close(wsKey); // ✅ enum
+      bybitWsClient.close(WS_KEY);
     } else {
-      bybitWsClient.connect(wsKey); // ✅ enum
+      bybitWsClient.connect(WS_KEY);
     }
   });
 
@@ -127,7 +128,8 @@ export function initWebSocket() {
     console.log('[Bybit WS] Connection closed');
   });
 
-  bybitWsClient.connect(wsKey); // ✅ initial connect uses enum
+  // Initial connect
+  bybitWsClient.connect(WS_KEY);
 }
 
 // --- Get positions ---

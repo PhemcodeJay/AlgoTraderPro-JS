@@ -2,19 +2,21 @@ import { RestClientV5, WebsocketClient, KlineIntervalV3 } from 'bybit-api';
 import dotenv from 'dotenv';
 import { storage, Position, MarketData, Balance, Signal } from './storage';
 import { randomUUID } from 'crypto';
-import { IndicatorData, calculateIndicators } from './indicators';
+import { IndicatorData, calculateIndicators, scoreSignal, EnhancedSignalScore } from './indicators';
+import { MLFilter } from './ml';
 
 dotenv.config();
+
+// Initialize MLFilter
+const { applyML } = new MLFilter();
 
 // --- Validate environment variables ---
 const API_KEY = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
 const USE_MAINNET = process.env.BYBIT_MAINNET === 'true';
 
-
 if (!API_KEY || !API_SECRET) {
   console.warn('[Bybit] Warning: BYBIT_API_KEY and BYBIT_API_SECRET not set. Using demo mode.');
-  // Don't exit - allow the app to run in demo mode without real API access
 }
 
 console.log(`[Bybit] Client starting on: ${USE_MAINNET ? 'MAINNET' : 'TESTNET'}`);
@@ -37,7 +39,10 @@ export const bybitRestClient = new RestClientV5({
 
 // --- WebSocket Client ---
 export const bybitWsClient = new WebsocketClient({
-  market: 'v5',
+  key: API_KEY,
+  secret: API_SECRET,
+  market: 'linear',
+  testnet: !USE_MAINNET,
   wsUrl: WS_URL,
 });
 
@@ -48,8 +53,8 @@ async function safeSubscribe(topics: string[], retries = 3, delay = 1000): Promi
       await bybitWsClient.subscribe(topics);
       console.log('[Bybit WS] Subscribed to topics:', topics);
       return;
-    } catch (err: any) {
-      console.error(`[Bybit WS] Subscription failed (attempt ${i + 1}/${retries}):`, err.message);
+    } catch (err: unknown) {
+      console.error(`[Bybit WS] Subscription failed (attempt ${i + 1}/${retries}):`, err instanceof Error ? err.message : err);
       if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -66,121 +71,69 @@ export function initWebSocket() {
     reconnectAttempts = 0;
     try {
       await safeSubscribe(['tickers.BTCUSDT', 'tickers.ETHUSDT']);
-    } catch (err: any) {
-      console.error('[Bybit WS] Failed to subscribe:', err.message);
+    } catch (err: unknown) {
+      console.error('[Bybit WS] Failed to subscribe:', err instanceof Error ? err.message : err);
     }
   });
 
-  bybitWsClient.on('update', async (msg: any) => {
-    if (msg.topic?.startsWith('tickers.')) {
-      try {
-        const data = msg.data;
-        const update: MarketData = {
-          symbol: data.symbol,
-          price: parseFloat(data.lastPrice) || 0,
-          change24h: parseFloat(data.price24hPcnt) || 0,
-          changePercent24h: parseFloat(data.price24hPcnt) * 100 || 0,
-          volume24h: parseFloat(data.turnover24h) || 0,
-          high24h: parseFloat(data.highPrice24h) || 0,
-          low24h: parseFloat(data.lowPrice24h) || 0,
-        };
-        const current = await storage.getMarketData().catch((err) => {
-          console.error('[Storage] getMarketData failed:', err);
-          return [] as MarketData[];
-        });
-        const idx = current.findIndex((d) => d.symbol === update.symbol);
-        if (idx >= 0) current[idx] = update;
-        else current.push(update);
-        await storage.setMarketData(current).catch((err) => {
-          console.error('[Storage] setMarketData failed:', err);
-        });
-      } catch (err: any) {
-        console.error('[Bybit WS] Error updating market data:', err.message);
-      }
+  bybitWsClient.on('update', async (data) => {
+    if (data.topic?.startsWith('tickers.')) {
+      const symbol = data.data.symbol;
+      const marketData: MarketData = {
+        symbol,
+        price: parseFloat(data.data.lastPrice || '0'),
+        change24h: parseFloat(data.data.price24hPcnt || '0') * 100,
+        changePercent24h: parseFloat(data.data.price24hPcnt || '0') * 100,
+        volume24h: parseFloat(data.data.volume24h || '0'),
+        high24h: parseFloat(data.data.highPrice24h || '0'),
+        low24h: parseFloat(data.data.lowPrice24h || '0'),
+      };
+      await storage.setMarketData([marketData]).catch((err) => {
+        console.error('[Storage] setMarketData failed:', err);
+      });
     }
   });
 
-  bybitWsClient.on('error', (err: any) => {
-    console.error('[Bybit WS] Error:', err?.message || err);
+  bybitWsClient.on('error', (err) => {
+    console.error('[Bybit WS] Error:', err);
+  });
+
+  bybitWsClient.on('reconnect', () => {
+    reconnectAttempts++;
+    console.log(`[Bybit WS] Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.error('[Bybit WS] Max reconnect attempts reached. Stopping.');
+      bybitWsClient.close();
+    }
   });
 
   bybitWsClient.on('close', () => {
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      console.error('[Bybit WS] Max reconnect attempts reached, stopping retries');
-      return;
-    }
-    reconnectAttempts++;
-    console.warn(`[Bybit WS] Connection closed, reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
-    setTimeout(initWebSocket, 3000);
+    console.log('[Bybit WS] Connection closed');
   });
 }
-initWebSocket();
 
-// --- Fetch market data with retry ---
-export async function getMarketData(symbols: string[] = ['BTCUSDT', 'ETHUSDT'], retries = 3): Promise<MarketData[]> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await bybitRestClient.getTickers({ category: 'linear', symbol: symbols.join(',') });
-      const marketData: MarketData[] = response.result.list.map((item: any) => ({
-        symbol: item.symbol,
-        price: parseFloat(item.lastPrice) || 0,
-        change24h: parseFloat(item.price24hPcnt) || 0,
-        changePercent24h: parseFloat(item.price24hPcnt) * 100 || 0,
-        volume24h: parseFloat(item.turnover24h) || 0,
-        high24h: parseFloat(item.highPrice24h) || 0,
-        low24h: parseFloat(item.lowPrice24h) || 0,
-      }));
-      await storage.setMarketData(marketData).catch((err) => {
-        console.error('[Storage] setMarketData failed:', err);
-      });
-      return marketData;
-    } catch (err: any) {
-      console.error(`[Bybit] getMarketData failed (attempt ${i + 1}/${retries}):`, err.message);
-      if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-  console.error('[Bybit] Max retries reached for getMarketData');
-  return [];
-}
-
-// --- Fetch positions ---
+// --- Get positions ---
 export async function getPositions(): Promise<Position[]> {
   try {
     const response = await bybitRestClient.getPositionInfo({ category: 'linear' });
-
-    const list = response?.result?.list;
-    if (!list || list.length === 0) {
-      return []; // no open trades, nothing to map
-    }
-
-    const positions: Position[] = list.map((pos: any) => ({
-      id: pos.positionIdx.toString(),
+    const positions: Position[] = response.result.list.map((pos: any) => ({
+      id: pos.positionIdx + '-' + randomUUID(),
       symbol: pos.symbol,
-      side: pos.side === 'Buy' ? 'BUY' : 'SELL',
-      size: parseFloat(pos.size) || 0,
-      entryPrice: parseFloat(pos.avgPrice) || 0,
-      currentPrice: parseFloat(pos.markPrice) || 0,
-      pnl: parseFloat(pos.unrealisedPnl) || 0,
-      pnlPercent: parseFloat(pos.positionValue) > 0
-        ? (parseFloat(pos.unrealisedPnl) / parseFloat(pos.positionValue)) * 100
-        : 0,
-      status: parseFloat(pos.size) > 0 ? 'OPEN' : 'CLOSED',
-      openTime: new Date(Number(pos.createdTime)).toISOString(),
-      closeTime: pos.updatedTime && parseFloat(pos.size) === 0
-        ? new Date(Number(pos.updatedTime)).toISOString()
-        : undefined,
-      exitPrice: parseFloat(pos.size) === 0 && pos.avgPrice ? parseFloat(pos.avgPrice) : undefined,
-      leverage: parseFloat(pos.leverage) || 10,
-      stopLoss: parseFloat(pos.stopLoss) || undefined,
-      takeProfit: parseFloat(pos.takeProfit) || undefined,
-      liquidationPrice: parseFloat(pos.liqPrice) || undefined,
-      trailingStop: parseFloat(pos.trailingStop) || undefined,
+      side: pos.side as 'BUY' | 'SELL',
+      size: parseFloat(pos.size),
+      entryPrice: parseFloat(pos.avgPrice),
+      currentPrice: parseFloat(pos.markPrice),
+      exitPrice: pos.positionValue ? parseFloat(pos.positionValue) : undefined,
+      pnl: parseFloat(pos.unrealisedPnl || '0'),
+      pnlPercent: parseFloat(pos.unrealisedPnl || '0') / parseFloat(pos.positionValue || '1') * 100,
+      status: pos.size === '0' ? 'CLOSED' : 'OPEN',
+      openTime: new Date(pos.createdTime).toISOString(),
+      closeTime: pos.updatedTime ? new Date(pos.updatedTime).toISOString() : undefined,
+      leverage: parseFloat(pos.leverage || '1'),
     }));
-
     await storage.setPositions(positions).catch((err) => {
       console.error('[Storage] setPositions failed:', err);
     });
-
     return positions;
   } catch (err: any) {
     console.error('[Bybit] getPositions failed:', err.message);
@@ -188,30 +141,19 @@ export async function getPositions(): Promise<Position[]> {
   }
 }
 
-// --- Fetch balance ---
+// --- Get balance ---
 export async function getBalance(): Promise<Balance> {
   try {
     const response = await bybitRestClient.getWalletBalance({ accountType: 'UNIFIED' });
-
-    const list = response?.result?.list;
-    if (!Array.isArray(list) || list.length === 0) {
-      console.warn('[Bybit] getBalance: no list in response');
-      return { capital: 0, available: 0, used: 0 };
-    }
-
-    const coins = list[0]?.coin ?? [];
-    const usdt = coins.find((c: any) => c.coin === 'USDT');
-
+    const usdt = response.result.list.find((asset: any) => asset.coin === 'USDT');
     const balance: Balance = {
-      capital: parseFloat(usdt?.equity ?? '0'),
-      available: parseFloat(usdt?.availableToWithdraw ?? '0'),
-      used: parseFloat(usdt?.locked ?? '0'),
+      capital: parseFloat(usdt?.totalEquity || '0'),
+      available: parseFloat(usdt?.totalAvailableBalance || '0'),
+      used: parseFloat(usdt?.totalMarginBalance || '0') - parseFloat(usdt?.totalAvailableBalance || '0'),
     };
-
     await storage.setBalance(balance).catch((err) => {
       console.error('[Storage] setBalance failed:', err);
     });
-
     return balance;
   } catch (err: any) {
     console.error('[Bybit] getBalance failed:', err.message);
@@ -219,93 +161,156 @@ export async function getBalance(): Promise<Balance> {
   }
 }
 
-// --- Scan trading signals ---
-export async function scanSignals(interval: KlineIntervalV3 | string = '15', limit: number = 50): Promise<Signal[]> {
-  const symbols = ['BTCUSDT', 'ETHUSDT'];
-  const signals: Signal[] = [];
-  const tradingConfig = await storage.getTradingConfig().catch((err) => {
-    console.error('[Storage] getTradingConfig failed:', err);
-    return { leverage: 10, stopLossPercent: 2, takeProfitPercent: 4 };
-  });
+// --- Scan signals ---
+type ValidInterval = '1' | '3' | '5' | '15' | '30' | '60' | '120' | '240' | '360' | '720' | 'D' | 'W' | 'M';
+
+export interface EnhancedSignal extends Signal {
+  interval: string;
+  signal_type: string;
+  indicators: IndicatorData;
+  entry: number;
+  sl: number;
+  tp: number;
+  trail: number;
+  liquidation: number;
+  margin_usdt: number;
+  bb_slope: string;
+  market: string;
+  leverage: number;
+  risk_reward: number;
+  atr_multiplier: number;
+  created_at: string;
+  signals: string[];
+}
+
+async function getTopSymbols(limit: number = 50): Promise<string[]> {
+  try {
+    const response = await bybitRestClient.getTickers({ category: 'linear' });
+    const tickers = response.result.list;
+    const usdtPairs = tickers
+      .filter((ticker: any) => ticker.symbol.endsWith('USDT'))
+      .map((ticker: any) => ({
+        symbol: ticker.symbol,
+        volume: parseFloat(ticker.volume24h || '0'),
+        price: parseFloat(ticker.lastPrice || '0')
+      }))
+      .filter((pair: any) => pair.volume > 0 && pair.price > 0)
+      .sort((a: any, b: any) => b.volume - a.volume)
+      .slice(0, limit)
+      .map((pair: any) => pair.symbol);
+    return usdtPairs.length > 0 ? usdtPairs : ['BTCUSDT', 'ETHUSDT', 'DOGEUSDT', 'SOLUSDT', 'XRPUSDT'];
+  } catch (err: unknown) {
+    console.error(`[getTopSymbols] Error fetching symbols:`, err instanceof Error ? err.message : err);
+    return ['BTCUSDT', 'ETHUSDT', 'DOGEUSDT', 'SOLUSDT', 'XRPUSDT'];
+  }
+}
+
+function enhanceSignal(signal: Signal, indicators: IndicatorData, scores: EnhancedSignalScore, interval: string): EnhancedSignal {
+  const price = signal.price || 0;
+  const atr = indicators.atr[indicators.atr.length - 1] || 0;
+  const leverage = 10;
+  const atrMultiplier = 2;
+  const riskReward = 2;
+  const type = signal.type || 'BUY';
+  const signal_type = type === 'BUY' && scores.buyScore > scores.sellScore ? 'buy' : 'sell';
+  const stopLoss = type === 'BUY' ? price - atr * atrMultiplier : price + atr * atrMultiplier;
+  const takeProfit = type === 'BUY' ? price + atr * atrMultiplier * riskReward : price - atr * atrMultiplier * riskReward;
+  const liquidationPrice = type === 'BUY' ? price * (1 - 1 / leverage) : price * (1 + 1 / leverage);
+  const marginUsdt = (price * 0.1) / leverage;
+  const trailingStop = atr * 0.5;
+
+  return {
+    ...signal,
+    interval,
+    signal_type,
+    indicators,
+    entry: price,
+    sl: parseFloat(stopLoss.toFixed(6)),
+    tp: parseFloat(takeProfit.toFixed(6)),
+    trail: parseFloat(trailingStop.toFixed(6)),
+    liquidation: parseFloat(liquidationPrice.toFixed(6)),
+    margin_usdt: marginUsdt,
+    bb_slope: indicators.bollinger.upper.length ? 'Contracting' : 'Neutral',
+    market: 'Normal',
+    leverage,
+    risk_reward: riskReward,
+    atr_multiplier: atrMultiplier,
+    created_at: new Date().toISOString(),
+    signals: ['MA_CROSSOVER'],
+  };
+}
+
+export async function scanSignals(params: { interval?: ValidInterval; limit?: number } = {}): Promise<EnhancedSignal[]> {
+  const { interval = '60', limit = 50 } = params;
+  const symbols = await getTopSymbols(limit);
+  const signals: EnhancedSignal[] = [];
+  const topN = Math.min(limit, 10);
 
   for (const symbol of symbols) {
     try {
-      const kline = await bybitRestClient.getKline({ category: 'linear', symbol, interval: interval as KlineIntervalV3, limit });
-      const closes = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
-      const highs = kline.result.list.map((c: any) => parseFloat(c[2])).reverse();
-      const lows = kline.result.list.map((c: any) => parseFloat(c[3])).reverse();
-      if (closes.length < 20) continue;
+      const kline = await bybitRestClient.getKline({
+        category: 'linear',
+        symbol,
+        interval,
+        limit: 100
+      });
 
-      const shortMA = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-      const longMA = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      const closes: number[] = kline.result.list.map((c: any) => parseFloat(c[4])).reverse();
+      const highs: number[] = kline.result.list.map((c: any) => parseFloat(c[2])).reverse();
+      const lows: number[] = kline.result.list.map((c: any) => parseFloat(c[3])).reverse();
+      const volumes: number[] = kline.result.list.map((c: any) => parseFloat(c[5])).reverse();
 
-      let type: 'BUY' | 'SELL' | null = null;
-      if (shortMA > longMA) type = 'BUY';
-      if (shortMA < longMA) type = 'SELL';
-
-      if (type) {
-        const currentPrice = closes[closes.length - 1];
-        const indicators = calculateIndicators(closes, highs, lows, []); // Fixed: Pass arrays separately
-        const atr = indicators.atr[indicators.atr.length - 1] || 0;
-        const leverage = tradingConfig.leverage || 10;
-        const riskReward = 2;
-        const atrMultiplier = 2;
-        const margin_usdt = 1.0;
-
-        const stopLoss = type === 'BUY'
-          ? currentPrice * (1 - (tradingConfig.stopLossPercent || 2) / 100)
-          : currentPrice * (1 + (tradingConfig.stopLossPercent || 2) / 100);
-        const takeProfit = type === 'BUY'
-          ? currentPrice * (1 + (tradingConfig.takeProfitPercent || 4) / 100)
-          : currentPrice * (1 - (tradingConfig.takeProfitPercent || 4) / 100);
-        const liquidationPrice = type === 'BUY'
-          ? currentPrice * (1 - 0.9 / leverage)
-          : currentPrice * (1 + 0.9 / leverage);
-        const trailingStop = type === 'BUY'
-          ? stopLoss + (Math.abs(currentPrice - stopLoss) * 0.5)
-          : stopLoss - (Math.abs(currentPrice - stopLoss) * 0.5);
-
-        signals.push({
-          id: randomUUID(),
-          symbol,
-          type,
-          score: Math.abs(shortMA - longMA),
-          price: currentPrice,
-          stopLoss: parseFloat(stopLoss.toFixed(6)),
-          takeProfit: parseFloat(takeProfit.toFixed(6)),
-          liquidationPrice: parseFloat(liquidationPrice.toFixed(6)),
-          trailingStop: parseFloat(trailingStop.toFixed(6)),
-          currentMarketPrice: currentPrice,
-          confidence: Math.abs(shortMA - longMA) / longMA > 0.01 ? 'HIGH' : 'MEDIUM',
-          status: 'PENDING',
-          timestamp: new Date().toISOString(),
-          interval,
-          signal_type: type.toLowerCase(),
-          indicators,
-          entry: parseFloat(currentPrice.toFixed(6)),
-          sl: parseFloat(stopLoss.toFixed(6)),
-          tp: parseFloat(takeProfit.toFixed(6)),
-          trail: parseFloat(trailingStop.toFixed(6)),
-          liquidation: parseFloat(liquidationPrice.toFixed(6)),
-          margin_usdt,
-          bb_slope: indicators.bollinger.upper.length ? 'Contracting' : 'Neutral',
-          market: 'Normal',
-          leverage,
-          risk_reward: riskReward,
-          atr_multiplier: atrMultiplier,
-          created_at: new Date().toISOString(),
-          signals: ['MA_CROSSOVER'],
-        });
+      if (closes.length < 20) {
+        console.warn(`[scanSignals] Insufficient kline data for ${symbol}`);
+        continue;
       }
-    } catch (err: any) {
-      console.error(`[Bybit] scanSignals failed for ${symbol}:`, err.message);
+
+      const scores = scoreSignal(closes, highs, lows, volumes);
+      const indicators = calculateIndicators(closes, highs, lows, volumes);
+      const type = scores.buyScore > scores.sellScore ? 'BUY' : 'SELL';
+      const score = type === 'BUY' ? scores.buyScore : scores.sellScore;
+
+      if (score < (type === 'BUY' ? 40 : 50)) {
+        continue;
+      }
+
+      const baseSignal: Signal = {
+        id: randomUUID(),
+        symbol,
+        type,
+        score,
+        price: closes[closes.length - 1],
+        currentMarketPrice: closes[closes.length - 1],
+        confidence: score > 70 ? 'HIGH' : score > 50 ? 'MEDIUM' : 'LOW',
+        status: 'PENDING',
+        timestamp: new Date().toISOString(),
+        stopLoss: 0,
+        takeProfit: 0,
+        liquidationPrice: 0
+      };
+
+      let finalSignal = enhanceSignal(baseSignal, indicators, scores, interval);
+      try {
+        finalSignal = applyML(finalSignal, closes, highs, lows, volumes) as EnhancedSignal;
+      } catch (err: unknown) {
+        console.warn(`[scanSignals] ML filter failed for ${symbol}:`, err instanceof Error ? err.message : err);
+      }
+
+      signals.push(finalSignal);
+    } catch (err: unknown) {
+      console.error(`[scanSignals] Error for ${symbol}:`, err instanceof Error ? err.message : err);
     }
   }
 
-  await storage.setSignals(signals).catch((err) => {
+  const sortedSignals = signals.sort((a, b) => b.score - a.score).slice(0, topN);
+  if (sortedSignals.length < symbols.length) {
+    console.warn(`[scanSignals] Only ${sortedSignals.length} of ${symbols.length} symbols analyzed successfully`);
+  }
+
+  await storage.setSignals(sortedSignals).catch((err) => {
     console.error('[Storage] setSignals failed:', err);
   });
-  return signals;
+  return sortedSignals;
 }
 
 // --- Execute trade ---

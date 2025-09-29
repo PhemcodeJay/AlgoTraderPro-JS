@@ -9,18 +9,18 @@
     "used": 0
   },
   "apiConfig": {
-    "bybitApiKey": "F7aQeUkd3obyUSDeNJ",
-    "bybitApiSecret": "A8WNJSiQodExiy2U2GsKTp2Na5ytSwBlK7iD",
-    "bybitTestnet": false
+    "bybitApiKey": "your_api_key",
+    "bybitApiSecret": "your_api_secret",
+    "bybitTestnet": true
   },
   "notificationConfig": {
     "discordEnabled": false,
-    "discordWebhook": "https://discord.com/api/webhooks/1398790878755295343/4SSV8EvFjBrabgaVbCySl6HRj8GMy5wA_0xrYeccnFE7tU0ODWnyX3NjCS8-XXcIzOe7",
+    "discordWebhook": "",
     "telegramEnabled": false,
-    "telegramBotToken": "8160938302:AAFUmPahGk14OY8F1v5FLHGoVRD-pGTvSOY",
-    "telegramChatId": "5852301284",
+    "telegramBotToken": "",
+    "telegramChatId": "",
     "whatsappEnabled": false,
-    "whatsappNumber": "+254101674289"
+    "whatsappNumber": ""
   },
   "tradingConfig": {
     "maxPositions": 5,

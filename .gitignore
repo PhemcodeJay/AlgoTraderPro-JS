@@ -2,6 +2,6 @@
 node_modules/
 server/node_modules/
 server/.env
-clean.js
-server/data.json
 test_api_endpoints.sh
+server/data.json
+clean.json

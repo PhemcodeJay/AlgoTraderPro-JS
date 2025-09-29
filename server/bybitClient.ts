@@ -9,7 +9,8 @@ dotenv.config();
 // --- Validate environment variables ---
 const API_KEY = process.env.BYBIT_API_KEY;
 const API_SECRET = process.env.BYBIT_API_SECRET;
-const USE_MAINNET = process.env.BYBIT_MAINNET === 'true' || process.env.BYBIT_TESTNET === 'false';
+const USE_MAINNET = process.env.BYBIT_MAINNET === 'true';
+
 
 if (!API_KEY || !API_SECRET) {
   console.warn('[Bybit] Warning: BYBIT_API_KEY and BYBIT_API_SECRET not set. Using demo mode.');
@@ -146,7 +147,13 @@ export async function getMarketData(symbols: string[] = ['BTCUSDT', 'ETHUSDT'], 
 export async function getPositions(): Promise<Position[]> {
   try {
     const response = await bybitRestClient.getPositionInfo({ category: 'linear' });
-    const positions: Position[] = response.result.list.map((pos: any) => ({
+
+    const list = response?.result?.list;
+    if (!list || list.length === 0) {
+      return []; // no open trades, nothing to map
+    }
+
+    const positions: Position[] = list.map((pos: any) => ({
       id: pos.positionIdx.toString(),
       symbol: pos.symbol,
       side: pos.side === 'Buy' ? 'BUY' : 'SELL',
@@ -169,9 +176,11 @@ export async function getPositions(): Promise<Position[]> {
       liquidationPrice: parseFloat(pos.liqPrice) || undefined,
       trailingStop: parseFloat(pos.trailingStop) || undefined,
     }));
+
     await storage.setPositions(positions).catch((err) => {
       console.error('[Storage] setPositions failed:', err);
     });
+
     return positions;
   } catch (err: any) {
     console.error('[Bybit] getPositions failed:', err.message);
@@ -183,15 +192,26 @@ export async function getPositions(): Promise<Position[]> {
 export async function getBalance(): Promise<Balance> {
   try {
     const response = await bybitRestClient.getWalletBalance({ accountType: 'UNIFIED' });
-    const usdt = response.result.list[0].coin.find((c: any) => c.coin === 'USDT');
+
+    const list = response?.result?.list;
+    if (!Array.isArray(list) || list.length === 0) {
+      console.warn('[Bybit] getBalance: no list in response');
+      return { capital: 0, available: 0, used: 0 };
+    }
+
+    const coins = list[0]?.coin ?? [];
+    const usdt = coins.find((c: any) => c.coin === 'USDT');
+
     const balance: Balance = {
-      capital: parseFloat(usdt?.equity || '0'),
-      available: parseFloat(usdt?.availableToWithdraw || '0'),
-      used: parseFloat(usdt?.locked || '0'),
+      capital: parseFloat(usdt?.equity ?? '0'),
+      available: parseFloat(usdt?.availableToWithdraw ?? '0'),
+      used: parseFloat(usdt?.locked ?? '0'),
     };
+
     await storage.setBalance(balance).catch((err) => {
       console.error('[Storage] setBalance failed:', err);
     });
+
     return balance;
   } catch (err: any) {
     console.error('[Bybit] getBalance failed:', err.message);

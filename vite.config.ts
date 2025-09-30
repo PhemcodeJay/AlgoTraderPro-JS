@@ -1,7 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
+
+// ES module __dirname replacement
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default defineConfig({
   plugins: [
@@ -30,13 +35,13 @@ export default defineConfig({
       strict: true,
       deny: ['**/.*'], // Deny access to dotfiles (e.g., .env, .git)
     },
-    host: '0.0.0.0', // Allow network access (matches npm start log)
-    port: 8000, // Match port from Vite preview log
-    allowedHosts: true, // Allow all hosts (fixes TypeScript error)
+    host: '0.0.0.0', // Allow network access
+    port: 8000,
+    allowedHosts: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000', // Proxy API calls to backend
-        changeOrigin: true, // Adjust Host header for backend
+        target: 'http://localhost:3000',
+        changeOrigin: true,
       },
     },
   },

@@ -1,7 +1,4 @@
 .env
 node_modules/
 server/node_modules/
-server/.env
-test_api_endpoints.sh
 server/data.json
-clean.json

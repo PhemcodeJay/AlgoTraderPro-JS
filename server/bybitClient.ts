@@ -460,6 +460,45 @@ export async function executeTrade(trade: {
   }
 }
 
+// --- Get market data ---
+export async function getMarketData(symbols?: string[]): Promise<MarketData[]> {
+  try {
+    // If no symbols provided, fetch top symbols
+    const targetSymbols = symbols && symbols.length > 0 ? symbols : await getTopSymbols(50);
+    
+    const marketData: MarketData[] = [];
+
+    // Fetch ticker info for each symbol
+    const response = await bybitRestClient.getTickers({ category: 'linear' });
+    const tickers = response.result.list;
+
+    for (const ticker of tickers) {
+      if (targetSymbols.includes(ticker.symbol)) {
+        marketData.push({
+          symbol: ticker.symbol,
+          price: parseFloat(ticker.lastPrice || '0'),
+          change24h: parseFloat(ticker.price24hPcnt || '0') * 100,
+          changePercent24h: parseFloat(ticker.price24hPcnt || '0') * 100,
+          volume24h: parseFloat(ticker.volume24h || '0'),
+          high24h: parseFloat(ticker.highPrice24h || '0'),
+          low24h: parseFloat(ticker.lowPrice24h || '0'),
+        });
+      }
+    }
+
+    // Store in your storage for app-wide access
+    await storage.setMarketData(marketData).catch((err: unknown) => {
+      console.error('[Storage] setMarketData failed:', err);
+    });
+
+    return marketData;
+  } catch (err: unknown) {
+    console.error('[Bybit] getMarketData failed:', err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+
 // --- Test connection ---
 export async function testConnection(): Promise<boolean> {
   try {

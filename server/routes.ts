@@ -26,6 +26,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
 
   // --- REST API Routes ---
+  app.get('/api/market-data', async (req: Request, res: Response) => {
+    try {
+      const symbols = req.query.symbols
+        ? (req.query.symbols as string).split(',')
+        : undefined;
+      const data = await getMarketData(symbols);
+      res.json(data);
+    } catch (error: any) {
+      console.error('[Routes] Failed to get market data:', error.message ?? error);
+      res.status(500).json({ error: 'Failed to get market data' });
+    }
+  });
+
   app.get('/api/positions', async (req: Request, res: Response) => {
     try {
       const positions = await getPositions();
@@ -52,7 +65,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!interval || typeof interval !== 'string' || !limit || typeof limit !== 'number') {
         return res.status(400).json({ error: 'Invalid interval or limit' });
       }
-      const signals = await scanSignals(interval as KlineIntervalV3, limit);
+      const signals = await scanSignals();
       await sendAllNotifications(signals); // Trigger notifications
       res.json(signals);
     } catch (error: any) {
@@ -60,6 +73,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ error: 'Failed to scan signals' });
     }
   });
+  
 
   app.post('/api/trade', async (req: Request<{}, {}, TradeRequest>, res: Response) => {
     try {

@@ -33,6 +33,9 @@ interface Signal {
   entryPrice: number;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   score: number;
+  type: 'BUY' | 'SELL';
+  interval: string;
+  price: number;
 }
 
 interface DashboardStats {

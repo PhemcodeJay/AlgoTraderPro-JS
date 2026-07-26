@@ -18,27 +18,33 @@ export default function TradingDashboardExample() {
       entryPrice: 45000,
       currentPrice: 46200,
       pnl: 120,
-      pnlPercent: 2.67
+      pnlPercent: 2.67,
+      status: "OPEN" as const,
+      leverage: 10
     },
     {
-      id: "2", 
+      id: "2",
       symbol: "ETHUSDT",
       side: "SELL" as const,
       size: 1.5,
       entryPrice: 3200,
       currentPrice: 3150,
       pnl: 75,
-      pnlPercent: 1.56
+      pnlPercent: 1.56,
+      status: "OPEN" as const,
+      leverage: 10
     },
     {
       id: "3",
-      symbol: "SOLUSDT", 
+      symbol: "SOLUSDT",
       side: "BUY" as const,
       size: 10,
       entryPrice: 150,
       currentPrice: 145,
       pnl: -50,
-      pnlPercent: -3.33
+      pnlPercent: -3.33,
+      status: "OPEN" as const,
+      leverage: 10
     }
   ];
 
@@ -46,26 +52,35 @@ export default function TradingDashboardExample() {
     {
       id: "1",
       symbol: "DOGEUSDT",
-      type: "BUY" as const,
+      signalType: "BUY" as const,
+      entryPrice: 0.08,
+      confidence: "HIGH" as const,
       score: 85,
-      price: 0.08,
-      confidence: "HIGH" as const
+      type: "BUY" as const,
+      interval: "15",
+      price: 0.08
     },
     {
       id: "2",
-      symbol: "ADAUSDT", 
-      type: "SELL" as const,
+      symbol: "ADAUSDT",
+      signalType: "SELL" as const,
+      entryPrice: 0.45,
+      confidence: "MEDIUM" as const,
       score: 72,
-      price: 0.45,
-      confidence: "MEDIUM" as const
+      type: "SELL" as const,
+      interval: "15",
+      price: 0.45
     },
     {
       id: "3",
       symbol: "XRPUSDT",
-      type: "BUY" as const,
+      signalType: "BUY" as const,
+      entryPrice: 0.62,
+      confidence: "LOW" as const,
       score: 61,
-      price: 0.62,
-      confidence: "LOW" as const
+      type: "BUY" as const,
+      interval: "15",
+      price: 0.62
     }
   ];
 
@@ -78,6 +93,7 @@ export default function TradingDashboardExample() {
       onToggleAutomatedTrading={() => console.log('Toggle automated trading')}
       onScanSignals={() => console.log('Scan signals')}
       isScanning={false}
+      onClosePosition={() => console.log('Close position')}
     />
   );
 }

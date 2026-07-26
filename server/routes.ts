@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 import { createServer, type Server } from 'http';
 import { WebSocketServer } from 'ws';
 import { storage, type Signal } from './storage';
-import { getMarketData, getPositions, getBalance, executeTrade, testConnection, bybitWsClient, closePosition } from './bybitClient';
+import { getMarketData, getPositions, getBalance, executeTrade, testConnection, initWebSocket, closePosition } from './bybitClient';
 import { scanSignals } from './scanSignals';
 import { startAutomatedTrading, stopAutomatedTrading } from './automatedTrader';
 import { sendAllNotifications } from './notifications';
@@ -169,11 +169,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Initialize Bybit WebSocket connection
+  initWebSocket();
+
   const marketWSS = new WebSocketServer({ server: httpServer, path: '/ws/market-data' });
-  bybitWsClient.on('update', (data: any) => {
-    if (data.topic?.startsWith('tickers.')) {
-      marketWSS.clients.forEach(c => c.readyState === c.OPEN && c.send(JSON.stringify(data.data)));
-    }
+  
+  marketWSS.on('connection', (ws) => {
+    console.log('[WS] Client connected to market data feed');
+    ws.on('close', () => {
+      console.log('[WS] Client disconnected from market data feed');
+    });
   });
 
   return httpServer;

@@ -308,6 +308,21 @@ function App() {
     },
   });
 
+  const toggleAutomatedTrading = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const response = await fetch('/api/automated-trading', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled, mode: tradingMode }),
+      });
+      if (!response.ok) throw new Error('Failed to toggle automated trading');
+      return await response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['app-status'] });
+    },
+  });
+
   const testConnection = useMutation({
     mutationFn: async () => {
       const response = await fetch('/api/test-connection', {
@@ -424,7 +439,11 @@ function App() {
             price: s.price
           }))}
           isAutomatedTradingEnabled={isAutomatedTradingEnabled}
-          onToggleAutomatedTrading={() => setIsAutomatedTradingEnabled(!isAutomatedTradingEnabled)}
+          onToggleAutomatedTrading={() => {
+            const newState = !isAutomatedTradingEnabled;
+            setIsAutomatedTradingEnabled(newState);
+            toggleAutomatedTrading.mutate(newState);
+          }}
           onScanSignals={() => scanSignalsMutation.mutate()}
           onClosePosition={(id) => closePosition.mutate(id)}
           isScanning={isScanning}
@@ -437,8 +456,7 @@ function App() {
             onToggleAutomatedTrading={() => {
               const newState = !isAutomatedTradingEnabled;
               setIsAutomatedTradingEnabled(newState);
-              // Backend sync would happen via mutation usually, assuming appStatus mutation handles it
-              changeTradingMode.mutate(tradingMode); // This is a bit of a hack but keeps UI in sync
+              toggleAutomatedTrading.mutate(newState);
             }}
             tradingConfig={tradingConfig}
             positions={positions}

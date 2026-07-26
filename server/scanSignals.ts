@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { calculateIndicators, scoreSignal, type EnhancedSignalScore, type IndicatorData } from './indicators';
 import { MLFilter } from './ml';
 
-const { applyML } = new MLFilter();
+const mlFilter = new MLFilter();
 
 // Define valid intervals based on indicators.py INTERVALS
 type ValidInterval = '5' | '60' | '240' | 'D';
@@ -176,7 +176,7 @@ export async function scanSignals(interval: ValidInterval = '60', topN: number =
 
       let finalSignal = enhanceSignal(baseSignal, indicators, scores, interval);
       try {
-        finalSignal = applyML(finalSignal, closes, highs, lows, volumes) as EnhancedSignal;
+        finalSignal = mlFilter.applyML(finalSignal, closes, highs, lows, volumes) as EnhancedSignal;
       } catch (err: any) {
         console.warn(`[scanSignals] ML filter failed for ${symbol}:`, err.message ?? err);
       }
@@ -237,7 +237,7 @@ export async function analyzeSingleSymbol(symbol: string, interval: ValidInterva
 
     let finalSignal = enhanceSignal(baseSignal, indicators, scores, interval);
     try {
-      finalSignal = applyML(finalSignal, closes, highs, lows, volumes) as EnhancedSignal;
+      finalSignal = mlFilter.applyML(finalSignal, closes, highs, lows, volumes) as EnhancedSignal;
     } catch (err: any) {
       console.warn(`[analyzeSingleSymbol] ML filter failed for ${symbol}:`, err.message ?? err);
     }
